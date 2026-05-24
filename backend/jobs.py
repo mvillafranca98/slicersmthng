@@ -115,7 +115,13 @@ def run_import(
     progress("downloading", 10, "Downloading from YouTube...")
     audio_file = song_dir / "original_audio.wav"
     download_opts = _yt_dlp_opts({
-        "format": "bestaudio/best",
+        # Permissive format chain: audio-only first, then any stream containing
+        # audio, then the absolute best available. YouTube periodically gates
+        # the audio-only formats; falling back to a combined stream lets the
+        # FFmpegExtractAudio postprocessor still extract WAV from a video+audio
+        # download. Avoids "Requested format is not available" errors.
+        "format": "bestaudio/bestaudio*/best",
+        "format_sort": ["acodec", "br"],
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "wav"}],
         "outtmpl": str(song_dir / "original_audio.%(ext)s"),
         "quiet": False,
