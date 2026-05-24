@@ -20,6 +20,22 @@ For the full product spec, see [`PRD.md`](./PRD.md).
 - The service sleeps after 15 min idle and takes ~30 sec to wake on the next request.
 - Stems live on the container's ephemeral disk — they're lost on every restart (every code push, every wake from sleep). Fine for personal use; if you want persistence, attach a Render Disk ($0.25/GB/mo) or move stem storage to Cloudflare R2 (10 GB free).
 
+### Stem separator: Replicate (paid) or Modal (free)
+
+The backend can talk to either:
+- **Replicate** (default) — pay-as-you-go, ~$0.02/song with `htdemucs`. Need to add credit at <https://replicate.com/account/billing>. Set `REPLICATE_API_TOKEN`.
+- **Modal** (free up to $30/mo of compute, ~1,600 free song separations) — set `STEM_SEPARATOR=modal` and `MODAL_DEMUCS_URL=<your modal endpoint>`.
+
+To use Modal:
+
+```bash
+pip install modal
+modal token new                # opens browser to authenticate (no card needed)
+modal deploy modal_demucs.py   # builds the image + deploys, prints a URL
+```
+
+Take the URL Modal prints (looks like `https://<username>--slicersmthng-demucs-separate.modal.run`) and set it as `MODAL_DEMUCS_URL` on Render, alongside `STEM_SEPARATOR=modal`. Save → Render redeploys → stem separation now runs free on Modal's GPU.
+
 ### YouTube on a cloud host
 
 YouTube blocks most datacenter IPs and asks for "sign in to confirm you're not a bot." There are three layers of defense built in:

@@ -120,7 +120,7 @@ def run_import(
         if on_progress:
             on_progress(job_id, stage, percent, message)
 
-    _require_replicate()
+    _require_separator()
 
     progress("validating", 0, "Validating URL...")
     import yt_dlp
@@ -161,7 +161,7 @@ def run_import(
     if not audio_file.exists():
         raise ValueError("No audio track found.")
 
-    return _process_audio_through_replicate(
+    return _process_audio_to_stems(
         job_id=job_id,
         audio_file=audio_file,
         song_id=song_id,
@@ -195,7 +195,7 @@ def run_import_file(
         if on_progress:
             on_progress(job_id, stage, percent, message)
 
-    _require_replicate()
+    _require_separator()
 
     if not uploaded_path.exists():
         raise ValueError("Upload missing or already cleaned up.")
@@ -209,7 +209,7 @@ def run_import_file(
     uploaded_path.replace(audio_file)
     progress("downloading", 15, "Saved upload, sending to Replicate...")
 
-    return _process_audio_through_replicate(
+    return _process_audio_to_stems(
         job_id=job_id,
         audio_file=audio_file,
         song_id=song_id,
@@ -232,7 +232,7 @@ def run_import_file(
 # Shared post-download pipeline
 # ---------------------------------------------------------------------------
 
-def _process_audio_through_replicate(
+def _process_audio_to_stems(
     *,
     job_id: str,
     audio_file: Path,
@@ -244,31 +244,15 @@ def _process_audio_through_replicate(
     meta_overrides: dict,
     progress,
 ):
-    import replicate
+    """Run stem separation (Modal or Replicate per env) then analyze + finalize."""
+    separator = _separator_name()
+    if separator == "modal":
+        stem_files = _separate_via_modal(audio_file, model, audio_format, stems_dir, progress)
+    else:
+        stem_files = _separate_via_replicate(audio_file, model, audio_format, stems_dir, progress)
 
-    progress("uploading", 30, "Uploading to Replicate GPU...")
-    progress("separating", 40, "Running Demucs on Replicate GPU...")
-    with open(audio_file, "rb") as f:
-        output = replicate.run(
-            REPLICATE_MODEL,
-            input={
-                "audio": f,
-                "model": model if model in MODEL_STEMS else "htdemucs",
-                "stem": "none",
-                "shifts": 1,
-                "overlap": 0.25,
-                "mp3_bitrate": 320,
-                "output_format": audio_format if audio_format in ("mp3", "flac") else "mp3",
-            },
-        )
-
-    progress("organizing", 75, "Downloading stems...")
-    ext = "mp3" if audio_format == "mp3" else "flac"
-    stem_files = _materialize_replicate_output(output, stems_dir, ext)
     if not stem_files:
-        raise RuntimeError(
-            "Replicate returned no stem files. Output was: " + repr(output)[:300]
-        )
+        raise RuntimeError(f"No stems were written by the '{separator}' separator.")
 
     progress("analyzing", 85, "Analyzing BPM, key, chords...")
     analysis = analyze_audio(song_dir, stems_dir)
@@ -327,12 +311,109 @@ def _make_song_dirs(storage_root: Path, song_id: str) -> tuple[Path, Path]:
     return song_dir, stems_dir
 
 
-def _require_replicate():
-    if not os.environ.get("REPLICATE_API_TOKEN"):
-        raise RuntimeError(
-            "REPLICATE_API_TOKEN is not set. Create one at "
-            "https://replicate.com/account/api-tokens and set it on the server."
+def _separator_name() -> str:
+    """Return 'modal' or 'replicate' depending on STEM_SEPARATOR env (default replicate)."""
+    name = (os.environ.get("STEM_SEPARATOR") or "replicate").strip().lower()
+    return "modal" if name == "modal" else "replicate"
+
+
+def _require_separator():
+    """Validate that the configured stem-separator has its required env wired up."""
+    name = _separator_name()
+    if name == "modal":
+        if not os.environ.get("MODAL_DEMUCS_URL"):
+            raise RuntimeError(
+                "STEM_SEPARATOR=modal but MODAL_DEMUCS_URL is not set. Deploy the "
+                "Modal function (see modal_demucs.py) and put its URL here."
+            )
+    else:
+        if not os.environ.get("REPLICATE_API_TOKEN"):
+            raise RuntimeError(
+                "REPLICATE_API_TOKEN is not set. Create one at "
+                "https://replicate.com/account/api-tokens — or set STEM_SEPARATOR=modal "
+                "to use the free Modal path instead."
+            )
+
+
+def _separate_via_replicate(audio_file: Path, model: str, audio_format: str,
+                             stems_dir: Path, progress) -> list[Path]:
+    """Stem separation via Replicate's hosted Demucs."""
+    import replicate
+
+    progress("uploading", 30, "Uploading to Replicate GPU...")
+    progress("separating", 40, "Running Demucs on Replicate GPU...")
+    with open(audio_file, "rb") as f:
+        output = replicate.run(
+            REPLICATE_MODEL,
+            input={
+                "audio": f,
+                "model": model if model in MODEL_STEMS else "htdemucs",
+                "stem": "none",
+                "shifts": 1,
+                "overlap": 0.25,
+                "mp3_bitrate": 320,
+                "output_format": audio_format if audio_format in ("mp3", "flac") else "mp3",
+            },
         )
+
+    progress("organizing", 75, "Downloading stems from Replicate...")
+    ext = "mp3" if audio_format == "mp3" else "flac"
+    return _materialize_replicate_output(output, stems_dir, ext)
+
+
+def _separate_via_modal(audio_file: Path, model: str, audio_format: str,
+                         stems_dir: Path, progress) -> list[Path]:
+    """Stem separation via a self-deployed Modal function (see modal_demucs.py).
+
+    Free up to ~1,600 songs/month within Modal's $30 free credit. Audio goes
+    over HTTP as base64; stems come back the same way. Simple, no SDK needed
+    on the backend.
+    """
+    import urllib.error
+
+    url = os.environ.get("MODAL_DEMUCS_URL", "").strip()
+    if not url:
+        raise RuntimeError("MODAL_DEMUCS_URL is not set on the server.")
+
+    audio_b64 = base64.b64encode(audio_file.read_bytes()).decode("ascii")
+    payload = json.dumps({
+        "audio_b64": audio_b64,
+        "model": model if model in MODEL_STEMS else "htdemucs",
+        "format": audio_format if audio_format in ("mp3", "flac") else "mp3",
+    }).encode("utf-8")
+
+    progress("uploading", 30, "Uploading to Modal GPU...")
+    progress("separating", 40, "Running Demucs on Modal GPU (free tier)...")
+
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=900) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="ignore")[:500]
+        raise RuntimeError(f"Modal endpoint HTTP {e.code}: {detail}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Modal endpoint unreachable: {e}") from e
+
+    if isinstance(body, dict) and body.get("error"):
+        raise RuntimeError(f"Modal demucs error: {body['error']}")
+    stems = (body or {}).get("stems") or {}
+    if not stems:
+        raise RuntimeError("Modal returned no stems in response.")
+
+    progress("organizing", 75, "Decoding stems from Modal response...")
+    ext = "mp3" if audio_format == "mp3" else "flac"
+    saved: list[Path] = []
+    for name, b64_data in stems.items():
+        dest = stems_dir / f"{_normalize_stem_name(name, '')}.{ext}"
+        dest.write_bytes(base64.b64decode(b64_data))
+        saved.append(dest)
+    return saved
 
 
 def _friendly_ytdlp_error(msg: str) -> str:
