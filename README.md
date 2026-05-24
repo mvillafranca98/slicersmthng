@@ -20,6 +20,19 @@ For the full product spec, see [`PRD.md`](./PRD.md).
 - The service sleeps after 15 min idle and takes ~30 sec to wake on the next request.
 - Stems live on the container's ephemeral disk — they're lost on every restart (every code push, every wake from sleep). Fine for personal use; if you want persistence, attach a Render Disk ($0.25/GB/mo) or move stem storage to Cloudflare R2 (10 GB free).
 
+### YouTube on a cloud host
+
+YouTube blocks most datacenter IPs and asks for "sign in to confirm you're not a bot." There are three layers of defense built in:
+
+1. **yt-dlp impersonation** (automatic). The backend tries `web` → `mweb` → `web_safari` clients in order, with a realistic Safari User-Agent. Sometimes that's enough.
+2. **Logged-in cookies** (recommended). Export your YouTube cookies from a logged-in Chrome session — the "Get cookies.txt LOCALLY" extension does this in one click. Then:
+   ```bash
+   # On your Mac:
+   base64 -i ~/Downloads/youtube.com_cookies.txt | pbcopy
+   ```
+   On Render → service → **Environment** → add `YT_DLP_COOKIES_B64` with the clipboard contents. Save → redeploys. Cookies typically last 1–4 weeks; refresh when you start seeing the bot interstitial again.
+3. **Audio file upload** (escape hatch). The UrlBar has an upload button next to it that accepts MP3/WAV/FLAC/M4A directly — bypasses YouTube entirely. Useful for songs not on YouTube, age-restricted videos, or when you don't want to deal with cookies.
+
 ---
 
 ## Run locally

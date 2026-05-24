@@ -22,7 +22,9 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY requirements.txt ./
-RUN pip install -r requirements.txt
+# Install pinned deps, then upgrade yt-dlp to the very latest so we get the
+# newest YouTube anti-bot workarounds without rebuilding the requirements pin.
+RUN pip install -r requirements.txt && pip install -U yt-dlp
 
 # Copy backend source.
 COPY server.py ./

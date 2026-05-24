@@ -18,6 +18,18 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ url, model, format }),
     }),
+  importFile: async (file: File, model: string, format: string) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('model', model);
+    fd.append('format', format);
+    const res = await fetch(`${BASE}/import-file`, { method: 'POST', body: fd });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error((err as { error?: string }).error || res.statusText);
+    }
+    return res.json() as Promise<{ job_id: string }>;
+  },
   jobStatus: (jobId: string) =>
     request<{ status: string; stage?: string; percent?: number; message?: string; result?: import('./types').Song; error?: string }>(`/jobs/${jobId}`),
   songs: () =>

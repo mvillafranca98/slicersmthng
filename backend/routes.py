@@ -6,8 +6,8 @@ from pathlib import Path
 from flask import Blueprint, request, jsonify, send_file
 
 from backend.config import get_storage
-from backend.utils import get_song_dir
-from backend.jobs import run_import
+from backend.utils import get_song_dir, sanitize_filename
+from backend.jobs import run_import, run_import_file
 from backend.data import (
     load_setlists,
     save_setlists,
@@ -94,6 +94,61 @@ def import_url():
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
     return jsonify({"job_id": job_id})
+
+@api.route("/import-file", methods=["POST"])
+def import_file():
+    """Multipart upload fallback when YouTube blocks the server's IP."""
+    upload = request.files.get("file")
+    if not upload or not upload.filename:
+        return jsonify({"error": "No file uploaded (multipart field 'file')"}), 400
+
+    allowed = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus"}
+    suffix = Path(upload.filename).suffix.lower()
+    if suffix not in allowed:
+        return jsonify({"error": f"Unsupported audio type {suffix}. Try MP3/WAV/FLAC/M4A."}), 400
+
+    model = request.form.get("model", "htdemucs")
+    quality = request.form.get("format", "mp3")
+
+    # Persist the upload to a temp path before handing off to the worker thread.
+    import tempfile
+    safe_name = sanitize_filename(upload.filename) or ("upload" + suffix)
+    tmp_dir = Path(tempfile.mkdtemp(prefix="slcr_"))
+    tmp_path = tmp_dir / safe_name
+    upload.save(str(tmp_path))
+
+    job_id = str(uuid.uuid4())
+    with jobs_lock:
+        jobs[job_id] = {"status": "pending", "stage": "", "percent": 0, "message": ""}
+
+    def on_progress(jid, stage, percent, message):
+        with jobs_lock:
+            if jid in jobs:
+                jobs[jid].update(status="running", stage=stage, percent=percent, message=message)
+        _emit_job_progress(jid, stage, percent, message)
+
+    def run():
+        try:
+            song = run_import_file(job_id, tmp_path, safe_name, model, quality, storage, on_progress)
+            with jobs_lock:
+                jobs[job_id].update(status="done", result=song, percent=100)
+            _emit_job_complete(job_id, song)
+        except Exception as e:
+            with jobs_lock:
+                jobs[job_id].update(status="error", error=str(e))
+            _emit_job_error(job_id, str(e))
+        finally:
+            # Best-effort cleanup of the temp staging dir.
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+                tmp_dir.rmdir()
+            except OSError:
+                pass
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"job_id": job_id})
+
 
 @api.route("/jobs/<job_id>")
 def job_status(job_id):
