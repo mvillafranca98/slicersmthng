@@ -32,6 +32,9 @@ YouTube blocks most datacenter IPs and asks for "sign in to confirm you're not a
    ```
    On Render → service → **Environment** → add `YT_DLP_COOKIES_B64` with the clipboard contents. Save → redeploys. Cookies typically last 1–4 weeks; refresh when you start seeing the bot interstitial again.
 3. **Audio file upload** (escape hatch). The UrlBar has an upload button next to it that accepts MP3/WAV/FLAC/M4A directly — bypasses YouTube entirely. Useful for songs not on YouTube, age-restricted videos, or when you don't want to deal with cookies.
+4. **Residential proxy** (most reliable for a real public deploy). Set `YT_DLP_PROXY` to a proxy URL — e.g. `http://user:pass@residential.example.com:8080`. Routes yt-dlp's requests through a real ISP IP that YouTube doesn't flag. Cheap residential proxies exist ($3–5/mo on Proxy-Cheap, IPRoyal, Webshare). This is what commercial competitors (Moises, Fadr) actually do — there's no free bypass that lasts forever.
+
+**Why cookies sometimes fail even when set:** YouTube cross-references the cookie's origin geography with the IP making the request. Cookies set in (say) Mexico hitting YouTube from an Oregon datacenter IP look like account hijacking to their fraud detection. Datacenter IPs + valid account cookies = often rejected. A residential proxy in roughly the same region as where the cookies were created tends to work better.
 
 ---
 

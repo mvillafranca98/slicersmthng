@@ -51,28 +51,47 @@ def _yt_dlp_opts(extra: dict | None = None) -> dict:
     opts: dict = {
         "quiet": True,
         "no_warnings": True,
-        # Try web first (works when not flagged), fall back to mobile/safari
-        # clients which sometimes bypass the bot-confirm interstitial.
+        # Mobile-web client FIRST: YouTube treats mobile sessions more leniently
+        # than desktop web for unfamiliar IPs (mobile-user pattern is harder to
+        # flag as a bot). Fall back to desktop variants if mweb doesn't return
+        # the requested formats.
         "extractor_args": {
             "youtube": {
-                "player_client": ["web", "mweb", "web_safari"],
+                "player_client": ["mweb", "web", "web_safari"],
             }
         },
-        # Realistic UA helps a little when no cookies are available.
+        # iPhone-Safari UA so the mweb client looks plausible.
         "http_headers": {
             "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/605.1.15 (KHTML, like Gecko) "
-                "Version/17.0 Safari/605.1.15"
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 "
+                "Mobile/15E148 Safari/604.1"
             ),
         },
     }
+
     cookies = _materialize_cookies()
     if cookies:
         opts["cookiefile"] = str(cookies)
+
+    # Optional HTTP/HTTPS/SOCKS proxy. Most reliable bypass for cloud IPs:
+    # pass a residential-proxy URL like
+    #   YT_DLP_PROXY=http://user:pass@residential-proxy.example.com:8080
+    proxy = os.environ.get("YT_DLP_PROXY", "").strip()
+    if proxy:
+        opts["proxy"] = proxy
+
     if extra:
         opts.update(extra)
     return opts
+
+
+def _bypass_status() -> str:
+    """Human-readable summary of which YouTube-bypass measures are active."""
+    parts = []
+    parts.append("cookies=" + ("yes" if _materialize_cookies() else "no"))
+    parts.append("proxy=" + ("yes" if os.environ.get("YT_DLP_PROXY", "").strip() else "no"))
+    return ", ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -311,17 +330,25 @@ def _require_replicate():
 def _friendly_ytdlp_error(msg: str) -> str:
     """Turn yt-dlp's verbose errors into actionable hints."""
     low = msg.lower()
+    status = _bypass_status()
     if "sign in to confirm you" in low or "not a bot" in low:
         return (
-            "YouTube is blocking this server's IP as a suspected bot. "
-            "Workarounds: (1) set YT_DLP_COOKIES_B64 on the server with cookies from "
-            "your logged-in Chrome, (2) upload the audio file directly instead of "
-            "pasting a YouTube link."
+            f"YouTube is blocking this server's IP as a suspected bot ({status}). "
+            "If cookies=yes here but it's still blocked, YouTube likely rejected them "
+            "(geographic mismatch between cookie origin and server IP, or stale cookies). "
+            "Best fixes: (a) set YT_DLP_PROXY to a residential proxy URL (~$3–5/mo), "
+            "(b) re-export cookies from a fresh logged-in YouTube session, "
+            "(c) upload the audio file directly via the upload button."
         )
     if "video unavailable" in low or "private" in low:
         return "This video is unavailable, private, or region-blocked."
     if "age" in low and "restrict" in low:
         return "This video is age-restricted. Try a different upload of the same song."
+    if "requested format" in low:
+        return (
+            "YouTube didn't offer any downloadable audio format for this video. "
+            f"({status}) — try a different upload, or use the file-upload button."
+        )
     return msg
 
 
