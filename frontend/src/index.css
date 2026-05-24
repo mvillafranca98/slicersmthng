@@ -3,14 +3,17 @@
 @tailwind utilities;
 
 :root {
-  --bg-deepest: #090B10;
-  --bg-deep: #0D1017;
-  --bg-card: #141820;
-  --bg-elevated: #1C2230;
-  --bg-glass: rgba(20, 24, 32, 0.72);
-  --primary: #6C63FF;
-  --primary-hover: #8B85FF;
-  --primary-glow: rgba(108, 99, 255, 0.35);
+  /* Studio Amber palette — warm dark + amber primary, classic DAW vibe.
+     The amber primary (#FFA94D) is intentionally offset from the drums
+     stem color (#FFB347) so they're visually distinct in context. */
+  --bg-deepest: #0B0D11;
+  --bg-deep: #0F1219;
+  --bg-card: #161A24;
+  --bg-elevated: #1D2230;
+  --bg-glass: rgba(22, 26, 36, 0.74);
+  --primary: #FFA94D;
+  --primary-hover: #FFC078;
+  --primary-glow: rgba(255, 169, 77, 0.38);
   --accent-cyan: #00E5FF;
   --accent-amber: #FFB347;
   --accent-red: #FF4E6A;
@@ -25,7 +28,7 @@
   --text-secondary: #8899BB;
   --text-muted: #4A5568;
   --border-subtle: rgba(255,255,255,0.06);
-  --border-active: rgba(108, 99, 255, 0.5);
+  --border-active: rgba(255, 169, 77, 0.5);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
   --dur-fast: 150ms;
@@ -40,8 +43,8 @@ body {
   margin: 0;
   font-family: 'Inter', system-ui, sans-serif;
   background:
-    radial-gradient(1200px 600px at 10% -10%, rgba(108, 99, 255, 0.12), transparent 60%),
-    radial-gradient(900px 500px at 100% 0%, rgba(0, 229, 255, 0.08), transparent 60%),
+    radial-gradient(1200px 600px at 10% -10%, rgba(255, 169, 77, 0.10), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(0, 229, 255, 0.06), transparent 60%),
     var(--bg-deepest);
   color: var(--text-primary);
   min-height: 100vh;

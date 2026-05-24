@@ -5,15 +5,17 @@ export default {
     extend: {
       colors: {
         bg: {
-          deepest: '#090B10',
-          deep: '#0D1017',
-          card: '#141820',
-          elevated: '#1C2230',
+          deepest: '#0B0D11',
+          deep: '#0F1219',
+          card: '#161A24',
+          elevated: '#1D2230',
         },
         primary: {
-          DEFAULT: '#6C63FF',
-          hover: '#8B85FF',
-          glow: 'rgba(108, 99, 255, 0.35)',
+          // Studio Amber — warm amber, deliberately offset from the drums
+          // stem color (#FFB347) so they don't get confused in the UI.
+          DEFAULT: '#FFA94D',
+          hover: '#FFC078',
+          glow: 'rgba(255, 169, 77, 0.38)',
         },
         accent: {
           cyan: '#00E5FF',
@@ -33,7 +35,7 @@ export default {
           primary: '#F0F4FF',
           secondary: '#8899BB',
           muted: '#4A5568',
-          inverse: '#090B10',
+          inverse: '#0B0D11',
         },
       },
       fontFamily: {

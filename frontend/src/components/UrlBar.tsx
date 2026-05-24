@@ -146,8 +146,8 @@ export function UrlBar() {
           disabled={!url.trim() || importing}
           className={cn(
             'h-10 px-5 rounded-lg inline-flex items-center gap-1.5 font-medium text-sm text-white transition-all shrink-0',
-            'bg-gradient-to-r from-primary to-[#8B85FF] shadow-[0_4px_20px_-6px_rgba(108,99,255,0.7)]',
-            'hover:shadow-[0_6px_28px_-6px_rgba(108,99,255,0.9)] active:scale-[0.98]',
+            'bg-gradient-to-r from-primary to-primary-hover shadow-[0_4px_20px_-6px_rgba(255,169,77,0.7)]',
+            'hover:shadow-[0_6px_28px_-6px_rgba(255,169,77,0.9)] active:scale-[0.98]',
             'disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none'
           )}
         >
