@@ -1,0 +1,21 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# One-click deploy: push this repo to GitHub, then on Render dashboard
+# "New +" → "Blueprint" → pick this repo. Render reads this file and
+# provisions the service. After first deploy, set REPLICATE_API_TOKEN
+# in the service's Environment tab.
+
+services:
+  - type: web
+    name: slicersmthng
+    runtime: docker
+    plan: free               # 750 hr/mo, 0.5 CPU, 512 MB; sleeps after 15 min idle
+    region: oregon           # change if you prefer; ~$0 difference
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/v1/songs
+    envVars:
+      - key: REPLICATE_API_TOKEN
+        sync: false          # do NOT commit; set manually in Render dashboard
+      - key: SLICERSMTHNG_STORAGE
+        value: /tmp/slicersmthng   # ephemeral disk; songs are lost on restart
+      - key: PYTHONUNBUFFERED
+        value: "1"

@@ -1,0 +1,23 @@
+# SlicerSmthng — PRD v2 backend (Replicate cloud GPU mode)
+
+# YouTube download (local)
+yt-dlp>=2024.10.7
+
+# Stem separation via Replicate cloud GPU
+replicate>=0.32.0
+
+# Web backend
+flask>=2.0.0
+flask-cors>=4.0.0
+flask-socketio>=5.3.0
+python-socketio>=5.0.0
+python-engineio>=4.0.0
+eventlet>=0.33.0
+
+# Audio analysis: BPM/key/chord detection (local, lightweight)
+librosa>=0.10.0
+soundfile>=0.12.0
+numpy<2.0,>=1.20.0
+
+# Note: PyTorch/Demucs are no longer required locally.
+# All stem separation runs on Replicate GPUs (set REPLICATE_API_TOKEN).

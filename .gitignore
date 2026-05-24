@@ -1,0 +1,50 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+eggs/
+.eggs/
+parts/
+sdist/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# --- Node / Frontend ---
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# --- Claude Code per-session/local-only ---
+.claude/settings.local.json
+
+# --- Demucs cache (legacy local; no longer used) ---
+.cache/
+models/
+
+# --- Generated stems / outputs ---
+# These shouldn't be in git; they're under ~/Music/SlicerSmthng/ on disk
+# but a stray copy might appear here during testing.
+songs/

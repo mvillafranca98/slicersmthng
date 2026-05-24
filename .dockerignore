@@ -1,0 +1,24 @@
+# Local Python venv and caches
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Frontend dev artifacts (rebuilt inside the image)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local-only paths
+.claude/
+*.log
+
+# Git
+.git/
+.gitignore
