@@ -16,7 +16,15 @@ MODEL_STEMS = {
     "htdemucs_6s": ["vocals", "drums", "bass", "guitar", "piano", "other"],
 }
 
-REPLICATE_MODEL = "cjwbw/demucs"
+# Pinned to a specific version hash because unpinned "owner/model" calls
+# sometimes 404 when Replicate's latest-version pointer goes stale for
+# community models. Overridable via REPLICATE_MODEL env var so we can swap
+# (e.g. "ryan5453/demucs:b26a4313b4d75983d60657f80dfa93b9beb354f6e4fa29ecd27ffe14d60117f6")
+# without redeploying code.
+DEFAULT_REPLICATE_MODEL = (
+    "cjwbw/demucs:abf8fe28e407afa6d8e41e86a759caccc0af8e49c3c68016006b62cb0968441e"
+)
+REPLICATE_MODEL = os.environ.get("REPLICATE_MODEL", DEFAULT_REPLICATE_MODEL)
 
 # Path where we materialize YouTube cookies (Netscape format) from env.
 COOKIES_PATH = Path("/tmp/yt_dlp_cookies.txt")
