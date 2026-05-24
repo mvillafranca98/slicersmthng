@@ -56,9 +56,8 @@ image = (
     image=image,
     gpu="T4",
     timeout=600,  # 10 min hard cap; a 5-min song usually finishes in <60 sec
-    scaledown_window=60,  # keep the container warm for 60 sec after a call
 )
-@modal.fastapi_endpoint(method="POST", docs=True)
+@modal.fastapi_endpoint(method="POST")
 def separate(req: dict) -> dict:
     """Stem-separate audio. Request: {audio_b64, model, format}. Returns {stems: {name: b64}}.
 
