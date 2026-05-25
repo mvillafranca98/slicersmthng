@@ -1,42 +1,93 @@
-"""Audio analysis: BPM, key, chords. Uses librosa when available; otherwise stubs."""
-from pathlib import Path
+"""Audio analysis: BPM + duration. Lightweight by design — only the first 30 sec of audio,
+mono at 22.05 kHz, just enough to estimate tempo. Skips heavy chroma/CQT calls that OOM
+on small-CPU hosts.
+
+Returns: {"bpm": float, "key": str, "chords": [...], "duration": float}.
+
+If librosa is not installed, or analysis times out / errors, returns sensible defaults so the
+import job still completes successfully (BPM is just metadata; the stems are the real product).
+
+To skip analysis entirely, set env SLICR_SKIP_ANALYSIS=1.
+"""
 import json
+import os
+from pathlib import Path
+
+DEFAULT_BPM = 120.0
+DEFAULT_KEY = "C major"
+# How many seconds of audio to analyze. librosa scales linearly with duration; capping at
+# 30 sec keeps RAM <100 MB and CPU <10 sec on Render free tier.
+ANALYSIS_WINDOW_SEC = 30
+SAMPLE_RATE = 22050
+
 
 def analyze_audio(song_dir: Path, stems_dir: Path) -> dict:
-    """Run BPM/key/chord analysis. Returns dict with bpm, key, chords, duration."""
-    result = {"bpm": 120, "key": "C major", "chords": [], "duration": 0.0}
-    # Prefer analysis from first stem we find
-    stem_files = list(stems_dir.glob("*.mp3")) if stems_dir.exists() else []
+    result = {
+        "bpm": DEFAULT_BPM,
+        "key": DEFAULT_KEY,
+        "chords": [],
+        "duration": 0.0,
+    }
+
+    # Quick exit if analysis is disabled by env (useful for tests / lowest-resource hosts).
+    if os.environ.get("SLICR_SKIP_ANALYSIS", "").strip() in ("1", "true", "yes"):
+        _write(song_dir, result)
+        return result
+
+    stem_files = []
+    if stems_dir.exists():
+        for ext in ("mp3", "wav", "flac", "m4a"):
+            stem_files.extend(stems_dir.glob(f"*.{ext}"))
     if not stem_files:
-        stem_files = list(stems_dir.glob("*.wav")) if stems_dir.exists() else []
-    analysis_path = song_dir / "analysis_result.json"
+        _write(song_dir, result)
+        return result
+
+    # Prefer drums for BPM detection if present (most rhythmic stem).
+    path = next((p for p in stem_files if p.stem.lower() == "drums"), stem_files[0])
+
     try:
         import librosa
-        # Use first stem for analysis (librosa.load supports wav/mp3 with audioread)
-        path = stem_files[0] if stem_files else None
-        if path and path.exists():
-            y, sr = librosa.load(str(path), sr=22050, mono=True)
+        import numpy as np  # noqa: F401  (ensures numpy is loaded before librosa's lazy import)
+
+        # Load only the first ANALYSIS_WINDOW_SEC seconds. librosa supports duration=...
+        # to stream-decode just that window — avoids loading full 4-min audio into RAM.
+        y, sr = librosa.load(
+            str(path),
+            sr=SAMPLE_RATE,
+            mono=True,
+            duration=ANALYSIS_WINDOW_SEC,
+        )
+        # Get full file duration via soundfile (fast metadata read, doesn't load audio).
+        try:
+            import soundfile as sf
+            info = sf.info(str(path))
+            result["duration"] = float(info.duration)
+        except Exception:
             result["duration"] = float(len(y)) / float(sr)
-            tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-            result["bpm"] = float(tempo) if hasattr(tempo, '__float__') else float(tempo[0])
-            # Key (simplified)
-            chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
-            result["key"] = "C major"  # placeholder; full key detection needs more logic
-            # Chord placeholder: one chord per 2 seconds
-            num_chords = max(1, int(result["duration"] / 2.0))
-            for i in range(num_chords):
-                result["chords"].append({
-                    "time": round(i * 2.0, 2),
-                    "chord": ["C", "G", "Am", "F", "Dm", "Em"][i % 6]
-                })
-    except Exception:
-        # Stub chords for demo
-        result["duration"] = 180.0
-        for t in range(0, 180, 4):
-            result["chords"].append({
-                "time": float(t),
-                "chord": ["C", "G", "Am", "F", "Dm", "Em"][(t // 4) % 6]
-            })
-    with open(analysis_path, "w") as f:
-        json.dump(result, f, indent=2)
+
+        # Beat tracking is the only heavy lift; it's still fast on a 30-sec window.
+        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+        # tempo may be ndarray or scalar depending on version.
+        try:
+            bpm = float(tempo)
+        except (TypeError, ValueError):
+            bpm = float(tempo[0]) if hasattr(tempo, '__len__') and len(tempo) else DEFAULT_BPM
+        # Sanity clamp — librosa occasionally returns 0 or absurd values.
+        result["bpm"] = bpm if 30 <= bpm <= 300 else DEFAULT_BPM
+
+        # Key + chords intentionally left as defaults (real detection needs heavier models;
+        # we'll wire that up as part of the chord-timeline task).
+    except Exception as e:
+        # Never block the import on analysis. Log to song dir for debugging.
+        (song_dir / "analysis_error.txt").write_text(f"{type(e).__name__}: {e}")
+
+    _write(song_dir, result)
     return result
+
+
+def _write(song_dir: Path, result: dict) -> None:
+    try:
+        with open(song_dir / "analysis_result.json", "w") as f:
+            json.dump(result, f, indent=2)
+    except OSError:
+        pass
