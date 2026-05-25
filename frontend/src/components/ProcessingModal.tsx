@@ -7,11 +7,11 @@ import { cn } from '../lib/cn';
 // Backend stages from backend/jobs.py — keep in sync.
 const STAGES: { key: string; label: string }[] = [
   { key: 'validating', label: 'Validating URL' },
-  { key: 'downloading', label: 'Downloading from YouTube' },
-  { key: 'uploading', label: 'Uploading to Replicate' },
+  { key: 'downloading', label: 'Fetching audio' },
+  { key: 'uploading', label: 'Uploading to GPU' },
   { key: 'separating', label: 'AI separating stems' },
   { key: 'organizing', label: 'Downloading stems' },
-  { key: 'analyzing', label: 'Analyzing BPM, key, chords' },
+  { key: 'analyzing', label: 'Analyzing BPM' },
   { key: 'finalizing', label: 'Finalizing' },
 ];
 
@@ -162,7 +162,7 @@ function RunningView({ stageIdx, percent, message }: { stageIdx: number; percent
 
       <div className="mt-5 flex items-center justify-between text-xs font-mono text-text-muted">
         <span>{percent.toFixed(0)}%</span>
-        <span className="text-text-secondary">~30 sec on Replicate GPU</span>
+        <span className="text-text-secondary">~30 sec separation + ~10 sec analysis</span>
       </div>
     </>
   );
