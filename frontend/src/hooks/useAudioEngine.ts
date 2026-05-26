@@ -1,73 +1,53 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect } from 'react';
 import { usePlayerStore } from '../stores/playerStore';
-import { api } from '../api';
+import { audioEngine } from '../lib/audioEngine';
 
-/** Single-audio engine: one HTMLAudioElement (first stem). Multi-stem mix can be added via Web Audio later. */
+/**
+ * Wires the audio engine singleton to the player store. Mount in exactly
+ * one place (Layout/PlayerBar). Triggers loadSong on song change, and
+ * forwards play/pause/volume/tempo/stem updates into the engine.
+ */
 export function useAudioEngine() {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const {
-    currentSong,
-    isPlaying,
-    setCurrentTime,
-    setDuration,
-    masterVolume,
-    loopA,
-    loopB,
-    loopActive,
-  } = usePlayerStore();
+  const currentSong = usePlayerStore((s) => s.currentSong);
+  const isPlaying = usePlayerStore((s) => s.isPlaying);
+  const masterVolume = usePlayerStore((s) => s.masterVolume);
+  const stems = usePlayerStore((s) => s.stems);
+  const tempoPercent = usePlayerStore((s) => s.tempoPercent);
 
+  // Load stems on song change. Songs without stems become a no-op load.
   useEffect(() => {
-    if (!currentSong?.stems?.length) {
-      setDuration(0);
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.src = '';
-      }
+    let cancelled = false;
+    if (!currentSong) {
+      audioEngine.loadSong('', []);
       return;
     }
-    const audio = new Audio(api.stemUrl(currentSong.id, currentSong.stems[0]));
-    audio.volume = masterVolume;
-    audio.onloadedmetadata = () => setDuration(audio.duration);
-    audio.onended = () => usePlayerStore.getState().setPlaying(false);
-    audioRef.current = audio;
-    return () => {
-      audio.pause();
-      audio.src = '';
-      audioRef.current = null;
-    };
-  }, [currentSong?.id]);
+    if (audioEngine.isReady(currentSong.id)) return;
+    audioEngine.loadSong(currentSong.id, currentSong.stems || [])
+      .catch((err) => {
+        if (cancelled) return;
+        console.error('audioEngine.loadSong failed', err);
+      });
+    return () => { cancelled = true; };
+  }, [currentSong?.id, currentSong?.stems?.join(',')]);
 
+  // Play/pause
   useEffect(() => {
-    const a = audioRef.current;
-    if (a) a.volume = masterVolume;
-  }, [masterVolume, currentSong?.id]);
+    if (isPlaying) audioEngine.play();
+    else audioEngine.pause();
+  }, [isPlaying]);
 
+  // Master volume
   useEffect(() => {
-    const a = audioRef.current;
-    if (!a) return;
-    if (isPlaying) a.play().catch(() => {});
-    else a.pause();
-  }, [isPlaying, currentSong?.id]);
+    audioEngine.setMasterVolume(masterVolume);
+  }, [masterVolume]);
 
+  // Per-stem solo/mute/volume — recompute gains
   useEffect(() => {
-    const interval = setInterval(() => {
-      const a = audioRef.current;
-      if (!a || isNaN(a.currentTime)) return;
-      let t = a.currentTime;
-      if (loopActive && loopA != null && loopB != null && t >= loopB) {
-        a.currentTime = loopA;
-        t = loopA;
-      }
-      setCurrentTime(t);
-    }, 150);
-    return () => clearInterval(interval);
-  }, [currentSong?.id, loopActive, loopA, loopB, setCurrentTime]);
+    audioEngine.applyStemGains();
+  }, [stems]);
 
-  const seek = useCallback((t: number) => {
-    const a = audioRef.current;
-    if (a) a.currentTime = t;
-    setCurrentTime(t);
-  }, [setCurrentTime]);
-
-  return { seek };
+  // Tempo
+  useEffect(() => {
+    audioEngine.setTempo(tempoPercent);
+  }, [tempoPercent]);
 }

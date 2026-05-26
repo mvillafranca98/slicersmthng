@@ -1,6 +1,7 @@
 import { ChevronsUp, Pause, Play, Repeat, Rewind, FastForward, SkipBack, SkipForward, Volume2 } from 'lucide-react';
 import { usePlayerStore } from '../stores/playerStore';
 import { useAudioEngine } from '../hooks/useAudioEngine';
+import { audioEngine } from '../lib/audioEngine';
 import { api } from '../api';
 import { cn } from '../lib/cn';
 
@@ -22,8 +23,8 @@ export function PlayerBar() {
     setExpanded,
     loopActive,
     setLoopActive,
-    seek,
   } = usePlayerStore();
+  const seek = (t: number) => audioEngine.seek(t);
   useAudioEngine();
 
   if (!currentSong) {
