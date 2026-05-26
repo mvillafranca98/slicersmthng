@@ -17,6 +17,8 @@ import { usePlayerStore } from '../stores/playerStore';
 import { audioEngine } from '../lib/audioEngine';
 import { api } from '../api';
 import { cn } from '../lib/cn';
+import { WaveformView } from './WaveformView';
+import { ChordStrip } from './ChordStrip';
 
 const STEM_COLORS: Record<string, string> = {
   vocals: '#FF6B8A',
@@ -75,12 +77,7 @@ export function PlayerExpanded() {
     return (loopB - loopA) / secondsPerBar;
   }, [loopA, loopB, secondsPerBar]);
 
-  const chordEvents = currentSong.chords || [];
-  const currentChord = chordEvents.find((c, i) => c.time <= currentTime
-    && (chordEvents[i + 1]?.time ?? Infinity) > currentTime)?.chord ?? '–';
-
   const seek = (t: number) => audioEngine.seek(t);
-  const progressPct = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
     <motion.div
@@ -142,47 +139,25 @@ export function PlayerExpanded() {
         </button>
       </div>
 
-      {/* ----- Timeline (basic; WaveSurfer coming next) ----- */}
-      <div className="shrink-0 px-5 py-3 border-b border-white/5">
-        <div className="flex items-center gap-3">
-          <span className="text-[11px] font-mono text-text-muted w-12 text-right tabular-nums">{formatTime(currentTime)}</span>
-          <div className="relative flex-1 h-2 group">
-            <div className="absolute inset-0 rounded-full bg-white/[0.06]" />
-            {/* Loop highlight band */}
-            {loopA != null && loopB != null && loopB > loopA && duration > 0 && (
-              <div
-                className="absolute top-0 bottom-0 rounded-full bg-primary/25 pointer-events-none"
-                style={{
-                  left: `${(loopA / duration) * 100}%`,
-                  width: `${((loopB - loopA) / duration) * 100}%`,
-                }}
-              />
-            )}
-            <div className="absolute inset-y-0 left-0 rounded-full progress-fill" style={{ width: `${progressPct}%` }} />
-            <input
-              type="range"
-              min={0}
-              max={duration || 100}
-              step={0.01}
-              value={currentTime}
-              onChange={(e) => seek(Number(e.target.value))}
-              aria-label="Seek"
-              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-            />
-          </div>
-          <span className="text-[11px] font-mono text-text-muted w-12 tabular-nums">{formatTime(duration)}</span>
+      {/* ----- Waveform + time readout ----- */}
+      <div className="shrink-0 px-5 pt-3 pb-2 border-b border-white/5 space-y-2">
+        <WaveformView height={96} />
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-mono text-text-muted tabular-nums">{formatTime(currentTime)}</span>
+          <span className="text-[10px] text-text-muted">
+            Click the waveform to seek · faint vertical lines mark beats (every 4th = bar)
+          </span>
+          <span className="text-[11px] font-mono text-text-muted tabular-nums">{formatTime(duration)}</span>
         </div>
       </div>
 
       {/* ----- Body: chord + mixer + controls ----- */}
       <div className="flex-1 overflow-auto px-5 py-4 space-y-5">
 
-        {/* Current chord (real chord detection lands with task #13) */}
+        {/* Chord timeline (real detection lands with task #13 on Modal) */}
         <section>
           <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted mb-1.5">Chord</div>
-          <div className="h-12 grid place-items-center rounded-xl bg-bg-card border border-white/5">
-            <span className="text-2xl font-bold text-text-primary">{currentChord}</span>
-          </div>
+          <ChordStrip />
         </section>
 
         {/* Stem mixer */}
