@@ -40,6 +40,8 @@ export const api = {
     request<{ ok: boolean }>(`/songs/${id}`, { method: 'DELETE' }),
   stemUrl: (songId: string, stem: string) => `${BASE}/songs/${songId}/stems/${stem}`,
   thumbnailUrl: (songId: string) => `${BASE}/songs/${songId}/thumbnail`,
+  lyrics: (songId: string) =>
+    request<{ synced: string | null; plain: string | null; source: string | null; not_found?: boolean; instrumental?: boolean; error?: string }>(`/songs/${songId}/lyrics`),
   saveSnapshot: (songId: string, snapshot: import('./types').MixSnapshot) =>
     request<{ ok: boolean }>(`/songs/${songId}/snapshots`, {
       method: 'POST',

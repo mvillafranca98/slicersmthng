@@ -12,6 +12,7 @@ import {
   Volume2,
   VolumeX,
   Magnet,
+  Timer,
 } from 'lucide-react';
 import { usePlayerStore } from '../stores/playerStore';
 import { audioEngine } from '../lib/audioEngine';
@@ -19,6 +20,7 @@ import { api } from '../api';
 import { cn } from '../lib/cn';
 import { WaveformView } from './WaveformView';
 import { ChordStrip } from './ChordStrip';
+import { LyricsPanel } from './LyricsPanel';
 
 const STEM_COLORS: Record<string, string> = {
   vocals: '#FF6B8A',
@@ -55,6 +57,8 @@ export function PlayerExpanded() {
     setLoopActive,
     tempoPercent,
     setTempoPercent,
+    metronomeEnabled,
+    setMetronomeEnabled,
   } = usePlayerStore();
   const [snapToBeat, setSnapToBeat] = useState(true);
 
@@ -160,6 +164,11 @@ export function PlayerExpanded() {
           <ChordStrip />
         </section>
 
+        {/* Lyrics (lazy-fetched from LRCLib) */}
+        <section>
+          <LyricsPanel />
+        </section>
+
         {/* Stem mixer */}
         <section>
           <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted mb-1.5">Stem mixer</div>
@@ -232,9 +241,28 @@ export function PlayerExpanded() {
         {/* Tempo + Loop */}
         <section className="grid md:grid-cols-2 gap-5">
 
-          {/* Tempo */}
+          {/* Tempo + metronome */}
           <div>
-            <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted mb-1.5">Tempo</div>
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted">Tempo</div>
+              <button
+                type="button"
+                onClick={() => setMetronomeEnabled(!metronomeEnabled)}
+                aria-pressed={metronomeEnabled}
+                title={metronomeEnabled
+                  ? 'Metronome ON — click on every beat, accent every 4th'
+                  : 'Click to turn on the metronome (locked to detected BPM)'}
+                className={cn(
+                  'h-6 px-2 rounded text-[10px] inline-flex items-center gap-1 transition-colors',
+                  metronomeEnabled
+                    ? 'bg-primary/15 text-primary border border-primary/30'
+                    : 'bg-white/[0.04] text-text-secondary border border-white/5 hover:text-text-primary',
+                )}
+              >
+                <Timer className="w-3 h-3" />
+                Metronome
+              </button>
+            </div>
             <div className="flex gap-1.5 flex-wrap">
               {[50, 75, 90, 100].map((p) => (
                 <button

@@ -39,6 +39,12 @@ class AudioEngine {
   private loadedSongId: string | null = null;
   private rafId: number | null = null;
 
+  // ---- Metronome ----
+  private metronomeGain: GainNode | null = null;
+  private metronomeNextClickTime = 0;     // ctx.currentTime of the next scheduled click
+  private metronomeBeatIndex = 0;         // global beat counter; index % 4 === 0 = downbeat
+  private metronomeBpm = 120;             // captured at play-start so changes mid-stop don't desync
+
   private ensureCtx(): AudioContext {
     if (!this.ctx) {
       const Ctor = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
@@ -124,6 +130,15 @@ class AudioEngine {
 
     this.playbackStartedAt = startAt - offset / this.tempo;
     this.playing = true;
+
+    // Metronome: align to the song's BPM and the current offset
+    const state = usePlayerStore.getState();
+    this.metronomeBpm = Math.max(40, Math.min(240, state.currentSong?.bpm || 120));
+    const secondsPerBeat = 60 / this.metronomeBpm;
+    // Where in the beat grid are we starting? Round up to the next beat after `offset`.
+    this.metronomeBeatIndex = Math.ceil(offset / secondsPerBeat);
+    this.metronomeNextClickTime = startAt + (this.metronomeBeatIndex * secondsPerBeat - offset) / this.tempo;
+
     this.startRaf();
   }
 
@@ -168,6 +183,44 @@ class AudioEngine {
 
   setMasterVolume(v: number) {
     if (this.masterGain) this.masterGain.gain.value = Math.max(0, Math.min(1, v));
+  }
+
+  /**
+   * Schedule metronome clicks for the next ~250ms of playback. Idempotent —
+   * called every animation frame; only new clicks beyond the current schedule
+   * horizon get added.
+   */
+  private scheduleMetronomeClicks() {
+    const state = usePlayerStore.getState();
+    if (!state.metronomeEnabled || !this.playing || !this.ctx) return;
+    if (!this.metronomeGain) {
+      this.metronomeGain = this.ctx.createGain();
+      this.metronomeGain.gain.value = 0.5;
+      this.metronomeGain.connect(this.ctx.destination);
+    }
+    const secondsPerBeat = 60 / this.metronomeBpm / this.tempo;
+    const horizon = this.ctx.currentTime + 0.25;
+    while (this.metronomeNextClickTime < horizon) {
+      this.scheduleClick(this.metronomeNextClickTime, this.metronomeBeatIndex % 4 === 0);
+      this.metronomeNextClickTime += secondsPerBeat;
+      this.metronomeBeatIndex += 1;
+    }
+  }
+
+  private scheduleClick(when: number, accent: boolean) {
+    if (!this.ctx || !this.metronomeGain) return;
+    const osc = this.ctx.createOscillator();
+    const env = this.ctx.createGain();
+    // Downbeat (every 4th beat) = higher pitch + slightly louder
+    osc.frequency.value = accent ? 1600 : 1100;
+    osc.type = 'triangle';
+    env.gain.setValueAtTime(0, when);
+    env.gain.linearRampToValueAtTime(accent ? 0.35 : 0.18, when + 0.004);
+    env.gain.exponentialRampToValueAtTime(0.0001, when + 0.06);
+    osc.connect(env);
+    env.connect(this.metronomeGain);
+    osc.start(when);
+    osc.stop(when + 0.08);
   }
 
   /**
@@ -220,6 +273,7 @@ class AudioEngine {
     if (this.rafId != null) return;
     const tick = () => {
       if (!this.playing) { this.rafId = null; return; }
+      this.scheduleMetronomeClicks();
       const pos = this.currentPosition();
       const state = usePlayerStore.getState();
 

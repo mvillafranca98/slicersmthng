@@ -8,6 +8,7 @@ from flask import Blueprint, request, jsonify, send_file
 from backend.config import get_storage
 from backend.utils import get_song_dir, sanitize_filename
 from backend.jobs import run_import, run_import_file
+from backend.storage import sync_metas_from_r2, save_song_lyrics, delete_song_from_r2
 from backend.data import (
     load_setlists,
     save_setlists,
@@ -21,6 +22,16 @@ from backend.data import (
 
 api = Blueprint("api", __name__, url_prefix="/api/v1")
 storage = get_storage()
+
+# Pull any persisted song metadata down from R2 at startup. This rebuilds
+# the local song_meta.json cache after a container restart so the library
+# isn't empty when the ephemeral disk has been wiped.
+try:
+    hydrated = sync_metas_from_r2(storage / "songs")
+    if hydrated:
+        print(f"[storage] hydrated {hydrated} song meta(s) from R2 at startup")
+except Exception as e:
+    print(f"[storage] startup R2 sync failed (non-fatal): {e}")
 jobs = {}  # job_id -> { status, stage, percent, message, result, error }
 jobs_lock = threading.Lock()
 socketio = None
@@ -190,10 +201,14 @@ def get_song(song_id):
 @api.route("/songs/<song_id>", methods=["DELETE"])
 def delete_song(song_id):
     song_dir = get_song_dir(storage, song_id)
-    if not song_dir.exists():
-        return jsonify({"error": "Song not found"}), 404
-    import shutil
-    shutil.rmtree(song_dir)
+    if song_dir.exists():
+        import shutil
+        shutil.rmtree(song_dir)
+    # Also nuke from R2 (stems + meta + lyrics) so we don't leak storage.
+    try:
+        delete_song_from_r2(song_id)
+    except Exception as e:
+        print(f"[delete_song] R2 cleanup for {song_id} failed: {e}")
     notes = load_notes()
     notes.pop(song_id, None)
     save_notes(notes)
@@ -225,6 +240,80 @@ def stream_stem(song_id, stem_name):
         if p.exists():
             return send_file(p, mimetype="audio/mpeg" if ext == "mp3" else f"audio/{ext}")
     return jsonify({"error": "Stem not found"}), 404
+
+@api.route("/songs/<song_id>/lyrics")
+def get_song_lyrics(song_id):
+    """Fetch (and cache) lyrics for a song from LRCLib (free, open API).
+
+    Returns shape:
+        { "synced": "[00:12.34]line of lyrics\\n[...]" | null,
+          "plain":  "full lyrics as one string"        | null,
+          "source": "lrclib" | null,
+          "not_found": bool }
+
+    Synced lyrics are in LRC format — the frontend parses them and lines
+    light up in time with the audio engine's currentTime.
+    """
+    song_dir = get_song_dir(storage, song_id)
+    meta_path = song_dir / "song_meta.json"
+    if not meta_path.exists():
+        return jsonify({"error": "Song not found"}), 404
+    with open(meta_path) as f:
+        meta = json.load(f)
+
+    # Cache check — lyrics.json sits next to song_meta.json
+    lyrics_path = song_dir / "lyrics.json"
+    if lyrics_path.exists():
+        with open(lyrics_path) as f:
+            return jsonify(json.load(f))
+
+    # Build LRCLib query
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    title = (meta.get("title") or "").strip()
+    artist = (meta.get("artist") or "").strip()
+    duration = int(meta.get("duration") or 0)
+    if not title:
+        return jsonify({"error": "No title in song meta — can't search lyrics"}), 400
+
+    params = {"track_name": title, "artist_name": artist}
+    if duration > 0:
+        params["duration"] = str(duration)
+    qs = urllib.parse.urlencode(params)
+    req = urllib.request.Request(
+        f"https://lrclib.net/api/get?{qs}",
+        headers={
+            "User-Agent": "SlicerSmthng/1.0 (+https://slicersmthng.onrender.com)",
+            "Accept": "application/json",
+        },
+    )
+
+    result: dict
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        result = {
+            "synced": data.get("syncedLyrics"),
+            "plain": data.get("plainLyrics"),
+            "source": "lrclib",
+            "not_found": False,
+            "instrumental": bool(data.get("instrumental")),
+        }
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            result = {"synced": None, "plain": None, "source": None,
+                      "not_found": True, "instrumental": False}
+        else:
+            return jsonify({"error": f"LRCLib HTTP {e.code}"}), 502
+    except Exception as e:
+        return jsonify({"error": f"LRCLib unreachable: {e}"}), 502
+
+    # Cache (both locally and on R2)
+    save_song_lyrics(song_id, result, lyrics_path)
+    return jsonify(result)
+
 
 @api.route("/songs/<song_id>/thumbnail")
 def song_thumbnail(song_id):

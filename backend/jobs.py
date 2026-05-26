@@ -8,6 +8,7 @@ from pathlib import Path
 
 from backend.utils import make_song_id
 from backend.analysis import analyze_audio
+from backend.storage import save_song_meta
 
 # Demucs stem names per model (PRD)
 MODEL_STEMS = {
@@ -311,8 +312,8 @@ def _process_audio_to_stems(
         "added_at": datetime.utcnow().isoformat() + "Z",
         "notes": "",
     }
-    with open(song_dir / "song_meta.json", "w") as f:
-        json.dump(meta, f, indent=2)
+    # Save locally AND push to R2 (so the song survives container restarts).
+    save_song_meta(song_id, meta, song_dir / "song_meta.json")
 
     progress("finalizing", 100, "Done.")
     return meta

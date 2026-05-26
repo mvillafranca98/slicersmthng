@@ -25,6 +25,7 @@ interface PlayerState {
   loopB: number | null;
   loopActive: boolean;
   stems: Record<string, StemState>;
+  metronomeEnabled: boolean;
   expanded: boolean;
   activeSetlist: Setlist | null;
   queueIndex: number;
@@ -39,6 +40,7 @@ interface PlayerState {
   setLoopB: (t: number | null) => void;
   setLoopActive: (v: boolean) => void;
   setStem: (name: string, patch: Partial<StemState>) => void;
+  setMetronomeEnabled: (v: boolean) => void;
   setExpanded: (v: boolean) => void;
   setActiveSetlist: (s: Setlist | null, index?: number) => void;
   nextInSetlist: () => Song | null;
@@ -59,6 +61,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   loopB: null,
   loopActive: false,
   stems: {},
+  metronomeEnabled: false,
   expanded: false,
   activeSetlist: null,
   queueIndex: 0,
@@ -86,6 +89,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       return { stems: next };
     });
   },
+  setMetronomeEnabled: (v) => set({ metronomeEnabled: v }),
   setExpanded: (v) => set({ expanded: v }),
   setActiveSetlist(s, index = 0) {
     set({ activeSetlist: s, queueIndex: index });

@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { Upload, Sparkles } from 'lucide-react';
 import { io } from 'socket.io-client';
+import { toast } from 'sonner';
 import { useLibraryStore } from '../stores/libraryStore';
 import { useJobStore } from '../stores/jobStore';
 import { usePlayerStore } from '../stores/playerStore';
@@ -35,7 +36,9 @@ export function UrlBar() {
     }
   }, []);
 
-  const wireJob = useCallback((jobId: string) => {
+  const wireJob = useCallback((jobId: string, opts?: { silent?: boolean; label?: string }) => {
+    const silent = opts?.silent;
+    const label = opts?.label;
     addJob(jobId);
     const s = getSocket();
     s.on('job:progress', (data: { job_id: string; stage: string; percent: number; message: string }) => {
@@ -45,11 +48,22 @@ export function UrlBar() {
       if (data.job_id === jobId) {
         completeJob(jobId, data.song);
         fetchSongs();
-        usePlayerStore.getState().setCurrentSong(data.song);
+        // Bulk imports: toast on each completion but don't yank the player to
+        // every new song. Single imports: load the song in the player as usual.
+        if (silent) {
+          toast.success(`Sliced: ${data.song.title}`, {
+            description: `${data.song.stems?.length || 0} stems${data.song.bpm ? ` · ${Math.round(data.song.bpm)} BPM` : ''}`,
+          });
+        } else {
+          usePlayerStore.getState().setCurrentSong(data.song);
+        }
       }
     });
     s.on('job:error', (data: { job_id: string; error: string }) => {
-      if (data.job_id === jobId) failJob(jobId, data.error);
+      if (data.job_id === jobId) {
+        failJob(jobId, data.error);
+        if (silent) toast.error(`Slice failed: ${label || 'track'}`, { description: data.error.slice(0, 140) });
+      }
     });
     // Robust polling: keeps trying through transient errors (Render cold starts,
     // dropped sockets, brief network blips). Hard cap at 30 min so it doesn't
@@ -70,10 +84,17 @@ export function UrlBar() {
           clearInterval(poll);
           completeJob(jobId, status.result);
           fetchSongs();
-          usePlayerStore.getState().setCurrentSong(status.result);
+          if (silent) {
+            toast.success(`Sliced: ${status.result.title}`, {
+              description: `${status.result.stems?.length || 0} stems${status.result.bpm ? ` · ${Math.round(status.result.bpm)} BPM` : ''}`,
+            });
+          } else {
+            usePlayerStore.getState().setCurrentSong(status.result);
+          }
         } else if (status.status === 'error') {
           clearInterval(poll);
           failJob(jobId, status.error || 'Unknown error');
+          if (silent) toast.error(`Slice failed: ${label || 'track'}`, { description: (status.error || '').slice(0, 140) });
         } else {
           updateJob(jobId, { stage: status.stage, percent: status.percent, message: status.message });
           // Periodically re-fetch the library so a finished song still appears
@@ -107,13 +128,26 @@ export function UrlBar() {
     }
   }, [url, model, format, wireJob, failJob]);
 
-  const handleFile = useCallback(async (file: File) => {
+  const handleFiles = useCallback(async (files: File[]) => {
+    if (!files.length) return;
     setImporting(true);
+    const bulk = files.length > 1;
+    if (bulk) toast.message(`Slicing ${files.length} tracks…`, { description: 'They\'ll land in your library as each one finishes.' });
     try {
-      const { job_id } = await api.importFile(file, model, format);
-      wireJob(job_id);
-    } catch (e) {
-      failJob(Object.keys(useJobStore.getState().jobs)[0] || 'unknown', (e as Error).message);
+      // Kick off all uploads in parallel. Each gets its own job, its own
+      // poll loop, its own toast on completion.
+      await Promise.all(files.map(async (file) => {
+        try {
+          const { job_id } = await api.importFile(file, model, format);
+          wireJob(job_id, { silent: bulk, label: file.name });
+        } catch (e) {
+          if (bulk) {
+            toast.error(`Upload failed: ${file.name}`, { description: (e as Error).message.slice(0, 140) });
+          } else {
+            failJob(Object.keys(useJobStore.getState().jobs)[0] || 'unknown', (e as Error).message);
+          }
+        }
+      }));
     } finally {
       setImporting(false);
     }
@@ -135,9 +169,9 @@ export function UrlBar() {
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
-          title="Upload an audio file (MP3, WAV, FLAC, M4A) — use when YouTube blocks the server"
+          title="Upload one or more audio files (MP3, WAV, FLAC, M4A) — bulk import is supported"
           className="h-10 w-10 grid place-items-center rounded-lg bg-bg-card border border-white/10 text-text-secondary hover:text-text-primary hover:border-white/20 transition-colors shrink-0"
-          aria-label="Upload audio file"
+          aria-label="Upload audio files"
         >
           <Upload className="w-4 h-4" />
         </button>
@@ -145,10 +179,11 @@ export function UrlBar() {
           ref={fileInputRef}
           type="file"
           accept=".mp3,.wav,.flac,.m4a,.aac,.ogg,.opus,audio/*"
+          multiple
           className="hidden"
           onChange={e => {
-            const f = e.target.files?.[0];
-            if (f) handleFile(f);
+            const files = Array.from(e.target.files || []);
+            if (files.length) handleFiles(files);
             e.target.value = '';
           }}
         />
