@@ -139,8 +139,11 @@ class AudioEngine {
     const target = Math.max(0, Math.min(t, this.maxDuration()));
     this.playbackOffset = target;
     if (this.playing) {
-      // Restart all sources at new offset.
+      // Restart all sources at the new offset. CRUCIAL: clear the playing
+      // flag first, otherwise play() short-circuits via its early-return and
+      // we end up with stopped sources + no new ones (silent dead audio).
       this.stopSources();
+      this.playing = false;
       this.play();
     } else {
       usePlayerStore.getState().setCurrentTime(target);
@@ -151,8 +154,11 @@ class AudioEngine {
     const next = Math.max(10, Math.min(200, percent)) / 100;
     if (Math.abs(next - this.tempo) < 1e-6) return;
     if (this.playing) {
+      // Capture position at the OLD rate first, then restart at the new one.
+      // Same early-return trap as seek() — clear the flag before play().
       this.playbackOffset = this.currentPosition();
       this.stopSources();
+      this.playing = false;
       this.tempo = next;
       this.play();
     } else {

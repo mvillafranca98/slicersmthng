@@ -320,15 +320,20 @@ export function PlayerExpanded() {
                 type="button"
                 onClick={() => setLoopActive(!loopActive)}
                 aria-pressed={loopActive}
+                title={loopActive
+                  ? 'Loop is ON — click to turn off'
+                  : 'Click to start looping between A and B (set both first)'}
+                disabled={!loopActive && (loopA == null || loopB == null)}
                 className={cn(
-                  'h-9 px-3 inline-flex items-center gap-1.5 rounded-lg text-xs font-medium transition-colors',
+                  'h-9 px-3 inline-flex items-center gap-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-colors',
                   loopActive
-                    ? 'bg-primary/20 text-primary border border-primary/40'
+                    ? 'bg-primary text-bg-deepest border border-primary shadow-[0_0_0_3px_rgba(255,169,77,0.25)]'
                     : 'bg-white/[0.04] text-text-secondary border border-white/5 hover:text-text-primary',
+                  !loopActive && (loopA == null || loopB == null) && 'opacity-40 cursor-not-allowed hover:text-text-secondary',
                 )}
               >
                 <Repeat className="w-3.5 h-3.5" />
-                {loopActive ? 'Looping' : 'Loop off'}
+                {loopActive ? 'Loop · ON' : 'Loop · off'}
               </button>
 
               {(loopA != null || loopB != null) && (
