@@ -51,9 +51,21 @@ export function UrlBar() {
     s.on('job:error', (data: { job_id: string; error: string }) => {
       if (data.job_id === jobId) failJob(jobId, data.error);
     });
+    // Robust polling: keeps trying through transient errors (Render cold starts,
+    // dropped sockets, brief network blips). Hard cap at 30 min so it doesn't
+    // poll forever if the job actually died silently.
+    let transientErrors = 0;
+    const startedAt = Date.now();
+    const HARD_CAP_MS = 30 * 60 * 1000;
     const poll = setInterval(async () => {
+      if (Date.now() - startedAt > HARD_CAP_MS) {
+        clearInterval(poll);
+        failJob(jobId, 'Job took longer than 30 minutes. Check the library — it may have finished.');
+        return;
+      }
       try {
         const status = await api.jobStatus(jobId);
+        transientErrors = 0;
         if (status.status === 'done' && status.result) {
           clearInterval(poll);
           completeJob(jobId, status.result);
@@ -64,9 +76,19 @@ export function UrlBar() {
           failJob(jobId, status.error || 'Unknown error');
         } else {
           updateJob(jobId, { stage: status.stage, percent: status.percent, message: status.message });
+          // Periodically re-fetch the library so a finished song still appears
+          // even if our job-status polling somehow misses the transition.
+          if (Math.random() < 0.05) fetchSongs();
         }
       } catch {
-        clearInterval(poll);
+        // Transient — don't kill the poll. Allow up to 20 misses (~30s) before
+        // giving up and trusting the library refresh to catch the finished song.
+        transientErrors++;
+        if (transientErrors > 20) {
+          clearInterval(poll);
+          fetchSongs();
+          failJob(jobId, 'Lost connection to job status. If the song appears in your library, it worked.');
+        }
       }
     }, 1500);
   }, [addJob, updateJob, completeJob, failJob, fetchSongs]);
