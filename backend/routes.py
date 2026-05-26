@@ -198,7 +198,24 @@ def delete_song(song_id):
 
 @api.route("/songs/<song_id>/stems/<stem_name>")
 def stream_stem(song_id, stem_name):
+    """Stream or redirect a stem audio file.
+
+    If the song's meta has stem_urls (R2 / object store), 302-redirect there.
+    Otherwise fall back to streaming the local file from ephemeral disk.
+    """
+    from flask import redirect
     song_dir = get_song_dir(storage, song_id)
+    meta_path = song_dir / "song_meta.json"
+    if meta_path.exists():
+        try:
+            with open(meta_path) as f:
+                meta = json.load(f)
+            stem_urls = (meta.get("stem_urls") or {})
+            if stem_name in stem_urls and stem_urls[stem_name]:
+                return redirect(stem_urls[stem_name], code=302)
+        except Exception:
+            pass
+    # Local-disk fallback (legacy + Replicate-path stems)
     stems_dir = song_dir / "stems"
     for ext in ["mp3", "wav", "flac"]:
         p = stems_dir / f"{stem_name}.{ext}"

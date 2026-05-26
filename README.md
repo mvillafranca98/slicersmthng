@@ -20,6 +20,32 @@ For the full product spec, see [`PRD.md`](./PRD.md).
 - The service sleeps after 15 min idle and takes ~30 sec to wake on the next request.
 - Stems live on the container's ephemeral disk — they're lost on every restart (every code push, every wake from sleep). Fine for personal use; if you want persistence, attach a Render Disk ($0.25/GB/mo) or move stem storage to Cloudflare R2 (10 GB free).
 
+### Persistent stem storage on Cloudflare R2 (recommended)
+
+Render's container disk is ephemeral — songs get wiped on every code push and every container restart. To keep your library between deploys, configure Cloudflare R2 (free up to 10 GB, ~$0.015/GB/mo after, zero egress fees):
+
+1. Sign up at <https://dash.cloudflare.com> (free, no card).
+2. Sidebar **R2** → **Create bucket**. Name it `slicersmthng-stems` (or anything). Choose a region.
+3. In the bucket → **Settings** → **Public access** → **Allow public access**. Copy the **R2.dev URL** (looks like `https://pub-xxxxxxxxxxxx.r2.dev`).
+4. Sidebar **R2** → **Manage R2 API Tokens** → **Create API Token**. Permissions: **Object Read & Write**. Scope to your bucket. Copy the **Access Key ID** + **Secret Access Key** + **Account ID**.
+
+Then on **Modal** (where stems get uploaded directly to save bandwidth):
+```bash
+modal secret create r2-credentials \
+    R2_ACCOUNT_ID=<your account id> \
+    R2_ACCESS_KEY_ID=<your r2 access key> \
+    R2_SECRET_ACCESS_KEY=<your r2 secret> \
+    R2_BUCKET=<your bucket name> \
+    R2_PUBLIC_URL_BASE=https://pub-<id>.r2.dev   # NO trailing slash
+modal deploy modal_demucs.py
+```
+
+And on **Render** (so the backend can build URLs for the stem-redirect endpoint), set the same 5 env vars in the service's Environment tab. Save → Render redeploys → songs slicked from now on get uploaded to R2 and survive forever.
+
+Existing songs from before R2 was wired stay on local disk and continue to work (the stem endpoint falls through to local files when no `stem_urls` is in the meta).
+
+---
+
 ### Stem separator: Replicate (paid) or Modal (free)
 
 The backend can talk to either:

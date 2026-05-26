@@ -247,19 +247,29 @@ def _process_audio_to_stems(
     """Run stem separation (Modal or Replicate per env) then analyze + finalize."""
     separator = _separator_name()
     if separator == "modal":
-        stem_files = _separate_via_modal(audio_file, model, audio_format, stems_dir, progress)
+        sep = _separate_via_modal(audio_file, model, audio_format, stems_dir, song_id, progress)
     else:
-        stem_files = _separate_via_replicate(audio_file, model, audio_format, stems_dir, progress)
+        sep = _separate_via_replicate(audio_file, model, audio_format, stems_dir, song_id, progress)
 
-    if not stem_files:
-        raise RuntimeError(f"No stems were written by the '{separator}' separator.")
+    stem_files: list[Path] = sep.get("stem_files") or []
+    stem_urls: dict[str, str] = sep.get("stem_urls") or {}
+    if not stem_files and not stem_urls:
+        raise RuntimeError(f"No stems were produced by the '{separator}' separator.")
 
-    progress("analyzing", 85, "Analyzing BPM, key, chords...")
-    analysis = analyze_audio(song_dir, stems_dir)
-    bpm = analysis.get("bpm", 120)
-    key = analysis.get("key", "C major")
-    chords = analysis.get("chords", [])
-    duration_sec = analysis.get("duration") or meta_overrides.get("duration_hint", 0)
+    # If the separator already computed BPM + duration (Modal does), trust those
+    # and skip the on-Render librosa call entirely. Way faster + avoids the
+    # 0.5-CPU bottleneck on Render's free tier.
+    bpm = sep.get("bpm")
+    duration_sec = sep.get("duration") or meta_overrides.get("duration_hint", 0)
+    if bpm is None or not duration_sec:
+        progress("analyzing", 85, "Analyzing BPM on Render (slower fallback)...")
+        analysis = analyze_audio(song_dir, stems_dir) if stem_files else {"bpm": 120, "duration": duration_sec}
+        if bpm is None:
+            bpm = analysis.get("bpm", 120)
+        if not duration_sec:
+            duration_sec = analysis.get("duration") or meta_overrides.get("duration_hint", 0)
+    key = "C major"  # real key detection lands with the chord model migration
+    chords: list = []
 
     thumb_path = song_dir / "thumbnail.jpg"
     thumbnail_url = meta_overrides.get("thumbnail_url") or ""
@@ -269,16 +279,20 @@ def _process_audio_to_stems(
         except Exception:
             pass
 
-    # Drop the original audio to save disk on ephemeral hosts.
+    # Drop the original audio — we don't need it anymore. Either Modal kept the
+    # stems on R2 (no local stems to compare against), or they live in stems_dir.
     try:
         audio_file.unlink()
     except OSError:
         pass
 
-    stem_names = [
-        p.stem for p in stems_dir.glob("*.*")
-        if p.suffix.lower() in (".mp3", ".wav", ".flac")
-    ]
+    if stem_urls:
+        stem_names = list(stem_urls.keys())
+    else:
+        stem_names = [
+            p.stem for p in stems_dir.glob("*.*")
+            if p.suffix.lower() in (".mp3", ".wav", ".flac")
+        ]
     meta = {
         "id": song_id,
         "title": meta_overrides.get("title", "unknown"),
@@ -288,6 +302,9 @@ def _process_audio_to_stems(
         "key": key,
         "chords": chords,
         "stems": stem_names or MODEL_STEMS.get(model, ["vocals", "drums", "bass", "other"]),
+        # stem_urls is the new field — present when stems live on R2 (or any
+        # remote object store). When present, the stems endpoint redirects here.
+        "stem_urls": stem_urls,
         "youtube_url": meta_overrides.get("youtube_url", ""),
         "model_used": model,
         "thumbnail_path": "thumbnail.jpg",
@@ -336,8 +353,13 @@ def _require_separator():
 
 
 def _separate_via_replicate(audio_file: Path, model: str, audio_format: str,
-                             stems_dir: Path, progress) -> list[Path]:
-    """Stem separation via Replicate's hosted Demucs."""
+                             stems_dir: Path, song_id: str, progress) -> dict:
+    """Stem separation via Replicate's hosted Demucs.
+
+    Returns a dict shaped the same way as _separate_via_modal so the calling
+    code is uniform regardless of which separator ran. Replicate always
+    downloads stems to the local stems_dir (no R2 path here yet).
+    """
     import replicate
 
     progress("uploading", 30, "Uploading to Replicate GPU...")
@@ -358,16 +380,24 @@ def _separate_via_replicate(audio_file: Path, model: str, audio_format: str,
 
     progress("organizing", 75, "Downloading stems from Replicate...")
     ext = "mp3" if audio_format == "mp3" else "flac"
-    return _materialize_replicate_output(output, stems_dir, ext)
+    files = _materialize_replicate_output(output, stems_dir, ext)
+    return {"stem_files": files, "stem_urls": {}, "bpm": None, "duration": None}
 
 
 def _separate_via_modal(audio_file: Path, model: str, audio_format: str,
-                         stems_dir: Path, progress) -> list[Path]:
-    """Stem separation via a self-deployed Modal function (see modal_demucs.py).
+                         stems_dir: Path, song_id: str, progress) -> dict:
+    """Stem separation via the self-deployed Modal function (modal_demucs.py).
 
-    Free up to ~1,600 songs/month within Modal's $30 free credit. Audio goes
-    over HTTP as base64; stems come back the same way. Simple, no SDK needed
-    on the backend.
+    Returns a dict shaped like:
+        {
+          "stem_files": [Path, ...],   # local files (only in legacy base64 mode)
+          "stem_urls": {name: url},    # populated when Modal uploaded to R2
+          "bpm": float | None,         # Modal also runs librosa, since it has the audio
+          "duration": float | None,
+        }
+
+    If R2 is wired up on Modal, audio uploads happen there directly and we
+    just get back URLs — no 30 MB JSON round trip, no local file writes.
     """
     import urllib.error
 
@@ -380,6 +410,7 @@ def _separate_via_modal(audio_file: Path, model: str, audio_format: str,
         "audio_b64": audio_b64,
         "model": model if model in MODEL_STEMS else "htdemucs",
         "format": audio_format if audio_format in ("mp3", "flac") else "mp3",
+        "song_id": song_id,
     }).encode("utf-8")
 
     progress("uploading", 30, "Uploading to Modal GPU...")
@@ -402,6 +433,23 @@ def _separate_via_modal(audio_file: Path, model: str, audio_format: str,
 
     if isinstance(body, dict) and body.get("error"):
         raise RuntimeError(f"Modal demucs error: {body['error']}")
+
+    bpm = body.get("bpm") if isinstance(body, dict) else None
+    duration = body.get("duration") if isinstance(body, dict) else None
+
+    # ----- Path A: R2 URLs returned -----
+    stems_urls = (body or {}).get("stems_urls") or {}
+    if stems_urls:
+        progress("organizing", 75, "Stems uploaded to R2 (no local copy needed)...")
+        normalized = {_normalize_stem_name(name, url): url for name, url in stems_urls.items()}
+        return {
+            "stem_files": [],
+            "stem_urls": normalized,
+            "bpm": bpm,
+            "duration": duration,
+        }
+
+    # ----- Path B: legacy base64 -----
     stems = (body or {}).get("stems") or {}
     if not stems:
         raise RuntimeError("Modal returned no stems in response.")
@@ -413,7 +461,12 @@ def _separate_via_modal(audio_file: Path, model: str, audio_format: str,
         dest = stems_dir / f"{_normalize_stem_name(name, '')}.{ext}"
         dest.write_bytes(base64.b64decode(b64_data))
         saved.append(dest)
-    return saved
+    return {
+        "stem_files": saved,
+        "stem_urls": {},
+        "bpm": bpm,
+        "duration": duration,
+    }
 
 
 def _friendly_ytdlp_error(msg: str) -> str:
