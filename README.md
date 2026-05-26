@@ -2,7 +2,7 @@
 
 A music practice workstation: paste a YouTube link, AI splits it into stems (vocals, drums, bass, guitar, piano, other), then practice with isolated stems, A/B loops, slowdown, chord detection, and setlists.
 
-**Stack:** Flask + React + Vite + Tailwind. Stem separation runs on a cloud GPU via [Replicate](https://replicate.com); everything else (YouTube download, BPM/key/chord analysis, audio mixing) is local.
+**Stack:** Flask + React + Vite + Tailwind. Stem separation runs on a cloud GPU via [Modal](https://modal.com) (free $30/mo credit) or [Replicate](https://replicate.com) (pay-as-you-go). Audio is fetched via yt-dlp, which natively supports SoundCloud, Bandcamp, YouTube, Vimeo, Mixcloud, Audius, and ~1,800 other sites. Or just drop in any MP3/WAV/FLAC/M4A file directly.
 
 For the full product spec, see [`PRD.md`](./PRD.md).
 

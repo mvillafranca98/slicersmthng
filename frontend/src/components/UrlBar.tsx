@@ -29,7 +29,7 @@ export function UrlBar() {
 
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const t = (e.clipboardData?.getData('text') || '').trim();
-    if (t && (t.includes('youtube.com') || t.includes('youtu.be'))) {
+    if (t && (t.startsWith('http://') || t.startsWith('https://'))) {
       e.preventDefault();
       setUrl(t);
     }
@@ -95,7 +95,7 @@ export function UrlBar() {
 
   const handleImport = useCallback(async () => {
     const u = url.trim();
-    if (!u || !u.includes('youtube')) return;
+    if (!u || !(u.startsWith('http://') || u.startsWith('https://'))) return;
     setImporting(true);
     try {
       const { job_id } = await api.importUrl(u, model, format);
@@ -124,7 +124,7 @@ export function UrlBar() {
       <div className="flex gap-2 items-center">
         <input
           type="text"
-          placeholder="Paste a YouTube URL"
+          placeholder="Paste a SoundCloud, Bandcamp, YouTube, or direct audio URL"
           value={url}
           onChange={e => setUrl(e.target.value)}
           onPaste={handlePaste}

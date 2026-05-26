@@ -68,8 +68,11 @@ def import_url():
     url = data.get("url", "").strip()
     model = data.get("model", "htdemucs")
     quality = data.get("format", "mp3")
-    if not url or "youtube" not in url and "youtu.be" not in url:
-        return jsonify({"error": "Valid YouTube URL required"}), 400
+    # yt-dlp supports 1,800+ sites (SoundCloud, Bandcamp, Vimeo, Mixcloud,
+    # Audius, direct MP3 URLs, ...). We let it decide what's extractable
+    # rather than maintain an allow-list. Just require an http(s) URL.
+    if not url or not (url.startswith("http://") or url.startswith("https://")):
+        return jsonify({"error": "Valid http(s) URL required"}), 400
     job_id = str(uuid.uuid4())
     with jobs_lock:
         jobs[job_id] = {"status": "pending", "stage": "", "percent": 0, "message": ""}
