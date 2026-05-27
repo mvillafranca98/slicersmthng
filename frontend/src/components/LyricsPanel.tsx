@@ -35,7 +35,9 @@ export function LyricsPanel() {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<Awaited<ReturnType<typeof api.lyrics>> | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const activeRef = useRef<HTMLDivElement | null>(null);
+  // ref attaches to the active lyric line (a <button>), so this must be
+  // an HTMLButtonElement — production tsc -b catches the type mismatch.
+  const activeRef = useRef<HTMLButtonElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Reset state when the song changes
