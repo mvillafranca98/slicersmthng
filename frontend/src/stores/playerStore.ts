@@ -26,6 +26,8 @@ interface PlayerState {
   loopActive: boolean;
   stems: Record<string, StemState>;
   metronomeEnabled: boolean;
+  metronomeVolume: number;        // 0-1, persisted to localStorage
+  metronomeCountIn: boolean;      // when true, 4 beats of click before stems start
   expanded: boolean;
   activeSetlist: Setlist | null;
   queueIndex: number;
@@ -41,6 +43,8 @@ interface PlayerState {
   setLoopActive: (v: boolean) => void;
   setStem: (name: string, patch: Partial<StemState>) => void;
   setMetronomeEnabled: (v: boolean) => void;
+  setMetronomeVolume: (v: number) => void;
+  setMetronomeCountIn: (v: boolean) => void;
   setExpanded: (v: boolean) => void;
   setActiveSetlist: (s: Setlist | null, index?: number) => void;
   nextInSetlist: () => Song | null;
@@ -62,6 +66,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   loopActive: false,
   stems: {},
   metronomeEnabled: false,
+  metronomeVolume: (() => {
+    if (typeof window === 'undefined') return 0.6;
+    const v = parseFloat(localStorage.getItem('slcr.metronomeVolume') || '');
+    return isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.6;
+  })(),
+  metronomeCountIn: (() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('slcr.metronomeCountIn') === '1';
+  })(),
   expanded: false,
   activeSetlist: null,
   queueIndex: 0,
@@ -90,6 +103,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     });
   },
   setMetronomeEnabled: (v) => set({ metronomeEnabled: v }),
+  setMetronomeVolume: (v) => {
+    const clamped = Math.max(0, Math.min(1, v));
+    if (typeof window !== 'undefined') localStorage.setItem('slcr.metronomeVolume', String(clamped));
+    set({ metronomeVolume: clamped });
+  },
+  setMetronomeCountIn: (v) => {
+    if (typeof window !== 'undefined') localStorage.setItem('slcr.metronomeCountIn', v ? '1' : '0');
+    set({ metronomeCountIn: v });
+  },
   setExpanded: (v) => set({ expanded: v }),
   setActiveSetlist(s, index = 0) {
     set({ activeSetlist: s, queueIndex: index });

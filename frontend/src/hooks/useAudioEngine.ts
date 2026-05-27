@@ -13,6 +13,7 @@ export function useAudioEngine() {
   const masterVolume = usePlayerStore((s) => s.masterVolume);
   const stems = usePlayerStore((s) => s.stems);
   const tempoPercent = usePlayerStore((s) => s.tempoPercent);
+  const metronomeVolume = usePlayerStore((s) => s.metronomeVolume);
 
   // Load stems on song change. Songs without stems become a no-op load.
   useEffect(() => {
@@ -30,11 +31,22 @@ export function useAudioEngine() {
     return () => { cancelled = true; };
   }, [currentSong?.id, currentSong?.stems?.join(',')]);
 
-  // Play/pause
+  // Play/pause. We read countIn from the latest store state at the moment of
+  // transition so toggling it on/off between plays takes effect immediately.
   useEffect(() => {
-    if (isPlaying) audioEngine.play();
-    else audioEngine.pause();
+    if (isPlaying) {
+      const state = usePlayerStore.getState();
+      const countInBeats = state.metronomeCountIn ? 4 : 0;
+      audioEngine.play({ countInBeats });
+    } else {
+      audioEngine.pause();
+    }
   }, [isPlaying]);
+
+  // Metronome volume → engine
+  useEffect(() => {
+    audioEngine.setMetronomeVolume(metronomeVolume);
+  }, [metronomeVolume]);
 
   // Master volume
   useEffect(() => {

@@ -13,10 +13,16 @@ export interface Song {
   stems: string[];
   chords: ChordEvent[];
   thumbnail_url?: string;
+  cover_url?: string | null;
   youtube_url?: string;
   model_used?: string;
   added_at?: string;
   notes?: string;
+  stem_urls?: Record<string, string>;
+  title_original?: string;
+  artist_original?: string;
+  metadata_source?: 'musicbrainz' | 'original';
+  metadata_confidence?: number;
 }
 
 export type StemName = 'vocals' | 'drums' | 'bass' | 'guitar' | 'piano' | 'other' | 'mytake';

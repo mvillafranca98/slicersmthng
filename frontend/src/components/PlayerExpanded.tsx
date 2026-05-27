@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   ChevronDown,
+  Music2,
   Pause,
   Play,
   Repeat,
@@ -15,6 +16,7 @@ import {
   Timer,
 } from 'lucide-react';
 import { usePlayerStore } from '../stores/playerStore';
+import { useLibraryStore } from '../stores/libraryStore';
 import { audioEngine } from '../lib/audioEngine';
 import { api } from '../api';
 import { cn } from '../lib/cn';
@@ -59,8 +61,18 @@ export function PlayerExpanded() {
     setTempoPercent,
     metronomeEnabled,
     setMetronomeEnabled,
+    metronomeVolume,
+    setMetronomeVolume,
+    metronomeCountIn,
+    setMetronomeCountIn,
+    activeSetlist,
+    queueIndex,
+    setActiveSetlist,
+    setCurrentSong,
   } = usePlayerStore();
+  const librarySongs = useLibraryStore((s) => s.songs);
   const [snapToBeat, setSnapToBeat] = useState(true);
+  const [imgError, setImgError] = useState(false);
 
   if (!currentSong) return null;
 
@@ -83,6 +95,40 @@ export function PlayerExpanded() {
 
   const seek = (t: number) => audioEngine.seek(t);
 
+  // ---- Prev / Next navigation ----
+  // Prev: if we're >3s in, rewind to start. Else, go to previous setlist song.
+  // Next: go to next setlist song. No-op if no setlist active or at end.
+  const goToPrev = () => {
+    if (currentTime > 3) { seek(0); return; }
+    if (!activeSetlist || queueIndex <= 0) { seek(0); return; }
+    const prevEntry = activeSetlist.songs[queueIndex - 1];
+    const song = librarySongs.find((s) => s.id === prevEntry?.song_id);
+    if (song) {
+      setActiveSetlist(activeSetlist, queueIndex - 1);
+      setCurrentSong(song);
+    } else {
+      seek(0);
+    }
+  };
+  const goToNext = () => {
+    if (!activeSetlist || queueIndex >= (activeSetlist.songs.length - 1)) return;
+    const nextEntry = activeSetlist.songs[queueIndex + 1];
+    const song = librarySongs.find((s) => s.id === nextEntry?.song_id);
+    if (song) {
+      setActiveSetlist(activeSetlist, queueIndex + 1);
+      setCurrentSong(song);
+    }
+  };
+  const hasPrev = currentTime > 3 || (activeSetlist != null && queueIndex > 0);
+  const hasNext = activeSetlist != null && queueIndex < (activeSetlist.songs.length - 1);
+
+  // ---- Loop in bars ----
+  const setLoopLengthBars = (bars: number) => {
+    if (loopA == null || bars <= 0) return;
+    const newB = Math.min(duration, loopA + bars * secondsPerBar);
+    setLoopB(newB);
+  };
+
   return (
     <motion.div
       initial={{ y: '100%' }}
@@ -94,7 +140,18 @@ export function PlayerExpanded() {
     >
       {/* ----- Header: song info + transport + collapse ----- */}
       <div className="shrink-0 px-5 py-4 border-b border-white/5 flex items-center gap-4">
-        <img src={thumb} alt="" className="w-14 h-14 rounded-lg object-cover ring-1 ring-white/10 shrink-0" />
+        {!imgError ? (
+          <img
+            src={thumb}
+            alt=""
+            className="w-14 h-14 rounded-lg object-cover ring-1 ring-white/10 shrink-0"
+            onError={() => setImgError(true)}
+          />
+        ) : (
+          <div className="w-14 h-14 rounded-lg ring-1 ring-white/10 shrink-0 grid place-items-center bg-gradient-to-br from-bg-elevated to-bg-deepest">
+            <Music2 className="w-6 h-6 text-text-muted" />
+          </div>
+        )}
         <div className="min-w-0 flex-1">
           <h2 className="text-base font-semibold text-text-primary truncate">{currentSong.title}</h2>
           <p className="text-sm text-text-secondary truncate">{currentSong.artist}</p>
@@ -115,7 +172,14 @@ export function PlayerExpanded() {
 
         {/* Transport */}
         <div className="flex items-center gap-1 shrink-0">
-          <TransportButton aria-label="Previous"><SkipBack className="w-4 h-4" /></TransportButton>
+          <TransportButton
+            aria-label={currentTime > 3 ? 'Restart song' : 'Previous song'}
+            title={currentTime > 3 ? 'Restart current song' : 'Previous in setlist'}
+            disabled={!hasPrev}
+            onClick={goToPrev}
+          >
+            <SkipBack className="w-4 h-4" />
+          </TransportButton>
           <TransportButton aria-label="Rewind 10s" onClick={() => seek(Math.max(0, currentTime - 10))}>
             <Rewind className="w-4 h-4" />
           </TransportButton>
@@ -130,7 +194,14 @@ export function PlayerExpanded() {
           <TransportButton aria-label="Forward 10s" onClick={() => seek(Math.min(duration, currentTime + 10))}>
             <FastForward className="w-4 h-4" />
           </TransportButton>
-          <TransportButton aria-label="Next"><SkipForward className="w-4 h-4" /></TransportButton>
+          <TransportButton
+            aria-label="Next song"
+            title="Next in setlist"
+            disabled={!hasNext}
+            onClick={goToNext}
+          >
+            <SkipForward className="w-4 h-4" />
+          </TransportButton>
         </div>
 
         <button
@@ -245,23 +316,6 @@ export function PlayerExpanded() {
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted">Tempo</div>
-              <button
-                type="button"
-                onClick={() => setMetronomeEnabled(!metronomeEnabled)}
-                aria-pressed={metronomeEnabled}
-                title={metronomeEnabled
-                  ? 'Metronome ON — click on every beat, accent every 4th'
-                  : 'Click to turn on the metronome (locked to detected BPM)'}
-                className={cn(
-                  'h-6 px-2 rounded text-[10px] inline-flex items-center gap-1 transition-colors',
-                  metronomeEnabled
-                    ? 'bg-primary/15 text-primary border border-primary/30'
-                    : 'bg-white/[0.04] text-text-secondary border border-white/5 hover:text-text-primary',
-                )}
-              >
-                <Timer className="w-3 h-3" />
-                Metronome
-              </button>
             </div>
             <div className="flex gap-1.5 flex-wrap">
               {[50, 75, 90, 100].map((p) => (
@@ -280,7 +334,67 @@ export function PlayerExpanded() {
                 </button>
               ))}
             </div>
-            <p className="mt-2 text-[11px] text-text-muted">Pitch shifts with speed (clean pitch-neutral stretch arrives with the waveform).</p>
+            <p className="mt-2 text-[11px] text-text-muted">Pitch shifts with speed (pitch-neutral stretch is queued for the next session).</p>
+
+            {/* Metronome controls */}
+            <div className="mt-4 rounded-xl bg-bg-card/60 border border-white/5 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted inline-flex items-center gap-1.5">
+                  <Timer className="w-3 h-3" />
+                  Metronome
+                </div>
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setMetronomeCountIn(!metronomeCountIn)}
+                    aria-pressed={metronomeCountIn}
+                    title="Play 4 count-in clicks before the song starts"
+                    className={cn(
+                      'h-6 px-2 rounded text-[10px] inline-flex items-center gap-1 transition-colors',
+                      metronomeCountIn
+                        ? 'bg-primary/15 text-primary border border-primary/30'
+                        : 'bg-white/[0.04] text-text-secondary border border-white/5 hover:text-text-primary',
+                    )}
+                  >
+                    Count-in
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMetronomeEnabled(!metronomeEnabled)}
+                    aria-pressed={metronomeEnabled}
+                    title={metronomeEnabled
+                      ? 'Click while playing'
+                      : 'Click on every beat (accent every 4th)'}
+                    className={cn(
+                      'h-6 px-2 rounded text-[10px] font-bold uppercase tracking-wider inline-flex items-center gap-1 transition-colors',
+                      metronomeEnabled
+                        ? 'bg-primary text-bg-deepest border border-primary'
+                        : 'bg-white/[0.04] text-text-secondary border border-white/5 hover:text-text-primary',
+                    )}
+                  >
+                    {metronomeEnabled ? 'ON' : 'OFF'}
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {metronomeVolume === 0
+                  ? <VolumeX className="w-3.5 h-3.5 text-text-muted shrink-0" />
+                  : <Volume2 className="w-3.5 h-3.5 text-text-muted shrink-0" />}
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={metronomeVolume}
+                  onChange={(e) => setMetronomeVolume(Number(e.target.value))}
+                  aria-label="Metronome volume"
+                  className="flex-1"
+                />
+                <span className="text-[10px] font-mono text-text-muted w-8 text-right tabular-nums">
+                  {Math.round(metronomeVolume * 100)}%
+                </span>
+              </div>
+            </div>
           </div>
 
           {/* Loop */}
@@ -344,6 +458,24 @@ export function PlayerExpanded() {
                 </>
               )}
 
+              {/* "Loop X bars" input — sets B exactly N bars after A */}
+              {loopA != null && (
+                <label className="inline-flex items-center gap-1 h-9 px-2 rounded-lg bg-white/[0.04] border border-white/5 text-[11px] text-text-secondary">
+                  <span>Length:</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={64}
+                    step={1}
+                    defaultValue={loopBars != null ? Math.max(1, Math.round(loopBars)) : 4}
+                    onChange={(e) => setLoopLengthBars(Number(e.target.value))}
+                    aria-label="Loop length in bars"
+                    className="w-12 bg-transparent text-text-primary font-mono text-xs text-right focus:outline-none"
+                  />
+                  <span>bars</span>
+                </label>
+              )}
+
               <button
                 type="button"
                 onClick={() => setLoopActive(!loopActive)}
@@ -397,13 +529,18 @@ export function PlayerExpanded() {
 }
 
 function TransportButton({
-  children, onClick, ...rest
+  children, onClick, disabled, className, ...rest
 }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="h-9 w-9 grid place-items-center rounded-lg text-text-secondary hover:text-text-primary hover:bg-white/[0.04] transition-colors"
+      disabled={disabled}
+      className={cn(
+        'h-9 w-9 grid place-items-center rounded-lg text-text-secondary hover:text-text-primary hover:bg-white/[0.04] transition-colors',
+        disabled && 'opacity-30 cursor-not-allowed hover:bg-transparent hover:text-text-secondary',
+        className,
+      )}
       {...rest}
     >
       {children}

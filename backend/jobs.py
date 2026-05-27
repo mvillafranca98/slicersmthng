@@ -8,7 +8,8 @@ from pathlib import Path
 
 from backend.utils import make_song_id
 from backend.analysis import analyze_audio
-from backend.storage import save_song_meta
+from backend.storage import save_song_meta, save_song_cover_art
+from backend.metadata import enrich_metadata, fetch_album_art_url
 from backend.metadata import enrich_metadata
 
 # Demucs stem names per model (PRD)
@@ -327,22 +328,36 @@ def _process_audio_to_stems(
             if p.suffix.lower() in (".mp3", ".wav", ".flac")
         ]
 
-    # Best-effort title + artist enrichment via MusicBrainz. Fixes messy
-    # filenames like "R U Mine_" → "R U Mine?" by Arctic Monkeys. Free,
-    # ~80% success on popular music, falls back silently to the raw values
-    # for tracks MusicBrainz doesn't recognize.
+    # Best-effort title + artist enrichment via MusicBrainz. Tries multiple
+    # search-string variants ("Title (Artist)" patterns, paren-stripped, etc.)
+    # so messy y2mate filenames resolve. Free, ~80% success on popular music.
     raw_title = meta_overrides.get("title", "unknown")
     raw_artist = meta_overrides.get("artist", "Unknown")
     enriched = enrich_metadata(raw_title, raw_artist)
+    final_title = enriched.get("title") or raw_title
+    final_artist = enriched.get("artist") or raw_artist
+
+    # iTunes Search API for album art (free, no key, ~95% on popular music).
+    # Only do this when MusicBrainz gave us confident metadata — sending a
+    # garbage title would just hit on the wrong song.
+    cover_url_remote: str | None = None
+    if enriched.get("source") == "musicbrainz":
+        try:
+            art_url = fetch_album_art_url(final_title, final_artist)
+            if art_url:
+                cover_url_remote = save_song_cover_art(song_id, art_url, song_dir / "cover.jpg")
+        except Exception as e:
+            print(f"[jobs] album-art fetch for {song_id} failed: {e}")
 
     meta = {
         "id": song_id,
-        "title": enriched.get("title") or raw_title,
-        "artist": enriched.get("artist") or raw_artist,
+        "title": final_title,
+        "artist": final_artist,
         "title_original": raw_title,           # keep the originals around
         "artist_original": raw_artist,         # so user can see what was changed
         "metadata_source": enriched.get("source", "original"),
         "metadata_confidence": enriched.get("confidence", 0),
+        "cover_url": cover_url_remote,         # R2 URL or None
         "duration": duration_sec,
         "bpm": bpm,
         "key": key,

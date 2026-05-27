@@ -44,6 +44,11 @@ class AudioEngine {
   private metronomeNextClickTime = 0;     // ctx.currentTime of the next scheduled click
   private metronomeBeatIndex = 0;         // global beat counter; index % 4 === 0 = downbeat
   private metronomeBpm = 120;             // captured at play-start so changes mid-stop don't desync
+  private metronomeVolume = 0.6;
+  // Pre-synthesized click waveforms — bulletproof vs the older
+  // gain-envelope approach (which silently dropped clicks on some browsers).
+  private clickBufferAccent: AudioBuffer | null = null;
+  private clickBufferRegular: AudioBuffer | null = null;
 
   private ensureCtx(): AudioContext {
     if (!this.ctx) {
@@ -105,15 +110,31 @@ class AudioEngine {
     this.applyStemGains();
   }
 
-  play() {
+  play(opts?: { countInBeats?: number }) {
     const ctx = this.ensureCtx();
     if (this.playing) return;
     // AudioContext starts "suspended" until a user gesture — this resume is
     // the gesture-bound call that lets audio actually play.
     void ctx.resume();
 
-    const startAt = ctx.currentTime + 0.05; // small lookahead so all sources start together
+    const state = usePlayerStore.getState();
+    this.metronomeBpm = Math.max(40, Math.min(240, state.currentSong?.bpm || 120));
+    const secondsPerBeat = 60 / this.metronomeBpm;
+    const countInBeats = Math.max(0, opts?.countInBeats || 0);
+    const countInDuration = countInBeats * secondsPerBeat;
+
+    const stemStartAt = ctx.currentTime + 0.05 + countInDuration;
     const offset = Math.max(0, Math.min(this.playbackOffset, this.maxDuration()));
+
+    // Count-in clicks fire BEFORE stems start. Plays regardless of whether
+    // metronomeEnabled is on — count-in is a user-requested intent.
+    if (countInBeats > 0) {
+      this.ensureMetronomeGain();
+      for (let i = 0; i < countInBeats; i++) {
+        const clickTime = ctx.currentTime + 0.05 + i * secondsPerBeat;
+        this.scheduleClick(clickTime, i === 0);
+      }
+    }
 
     this.stems.forEach((node) => {
       const src = ctx.createBufferSource();
@@ -121,25 +142,55 @@ class AudioEngine {
       src.playbackRate.value = this.tempo;
       src.connect(node.gain);
       try {
-        src.start(startAt, offset);
+        src.start(stemStartAt, offset);
       } catch {
         // start() throws if buffer is null or duration is invalid — skip silently
       }
       node.source = src;
     });
 
-    this.playbackStartedAt = startAt - offset / this.tempo;
+    this.playbackStartedAt = stemStartAt - offset / this.tempo;
     this.playing = true;
 
-    // Metronome: align to the song's BPM and the current offset
-    const state = usePlayerStore.getState();
-    this.metronomeBpm = Math.max(40, Math.min(240, state.currentSong?.bpm || 120));
-    const secondsPerBeat = 60 / this.metronomeBpm;
-    // Where in the beat grid are we starting? Round up to the next beat after `offset`.
+    // Metronome: snap next click to the next whole beat in song time, then
+    // convert that song time back to audio-clock time.
     this.metronomeBeatIndex = Math.ceil(offset / secondsPerBeat);
-    this.metronomeNextClickTime = startAt + (this.metronomeBeatIndex * secondsPerBeat - offset) / this.tempo;
+    const firstBeatInSongTime = this.metronomeBeatIndex * secondsPerBeat;
+    this.metronomeNextClickTime = stemStartAt + (firstBeatInSongTime - offset) / this.tempo;
 
     this.startRaf();
+  }
+
+  private ensureMetronomeGain() {
+    if (!this.ctx || this.metronomeGain) return;
+    this.metronomeGain = this.ctx.createGain();
+    this.metronomeGain.gain.value = this.metronomeVolume;
+    this.metronomeGain.connect(this.ctx.destination);
+  }
+
+  private synthesizeClickBuffers() {
+    if (!this.ctx || this.clickBufferAccent) return;
+    const sampleRate = this.ctx.sampleRate;
+    const synth = (freq: number, peak: number): AudioBuffer => {
+      const duration = 0.05;
+      const samples = Math.floor(sampleRate * duration);
+      const buf = this.ctx!.createBuffer(1, samples, sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < samples; i++) {
+        const t = i / sampleRate;
+        const env = Math.exp(-35 * t);
+        data[i] = peak * env * Math.sin(2 * Math.PI * freq * t);
+      }
+      return buf;
+    };
+    // Downbeat = brighter + louder; regular = lower + softer
+    this.clickBufferAccent = synth(1800, 0.95);
+    this.clickBufferRegular = synth(1100, 0.55);
+  }
+
+  setMetronomeVolume(v: number) {
+    this.metronomeVolume = Math.max(0, Math.min(1, v));
+    if (this.metronomeGain) this.metronomeGain.gain.value = this.metronomeVolume;
   }
 
   pause() {
@@ -193,25 +244,16 @@ class AudioEngine {
   private scheduleMetronomeClicks() {
     const state = usePlayerStore.getState();
     if (!state.metronomeEnabled || !this.playing || !this.ctx) return;
-    if (!this.metronomeGain) {
-      this.metronomeGain = this.ctx.createGain();
-      this.metronomeGain.gain.value = 0.5;
-      this.metronomeGain.connect(this.ctx.destination);
-    }
+    this.ensureMetronomeGain();
 
-    // If the metronome was just toggled on mid-playback, metronomeNextClickTime
-    // is stale (probably 0 or set when the song started before metronome was on).
-    // Resync to the current position so clicks start NOW rather than try to fire
-    // a thousand of them in the past (which audibly drops everything).
+    // Resync if the next click time is stale (toggled on mid-song).
     if (this.metronomeNextClickTime < this.ctx.currentTime - 0.05) {
       const songPos = this.currentPosition();
       const songBpm = Math.max(40, Math.min(240, state.currentSong?.bpm || 120));
       this.metronomeBpm = songBpm;
       const secondsPerBeatInSong = 60 / songBpm;
-      // Snap to the next whole beat at or after the current song position.
       this.metronomeBeatIndex = Math.ceil(songPos / secondsPerBeatInSong);
       const beatPosInSong = this.metronomeBeatIndex * secondsPerBeatInSong;
-      // Convert song time back to audio-clock time (accounts for tempo).
       this.metronomeNextClickTime = this.ctx.currentTime + (beatPosInSong - songPos) / this.tempo;
     }
 
@@ -224,20 +266,25 @@ class AudioEngine {
     }
   }
 
+  /**
+   * Fire a single metronome click at the given audio-clock time.
+   * Uses a pre-synthesized AudioBuffer instead of building a gain envelope —
+   * way more reliable across browsers + handles past-time scheduling sanely.
+   */
   private scheduleClick(when: number, accent: boolean) {
-    if (!this.ctx || !this.metronomeGain) return;
-    const osc = this.ctx.createOscillator();
-    const env = this.ctx.createGain();
-    // Downbeat (every 4th beat) = higher pitch + slightly louder
-    osc.frequency.value = accent ? 1600 : 1100;
-    osc.type = 'triangle';
-    env.gain.setValueAtTime(0, when);
-    env.gain.linearRampToValueAtTime(accent ? 0.35 : 0.18, when + 0.004);
-    env.gain.exponentialRampToValueAtTime(0.0001, when + 0.06);
-    osc.connect(env);
-    env.connect(this.metronomeGain);
-    osc.start(when);
-    osc.stop(when + 0.08);
+    if (!this.ctx) return;
+    this.ensureMetronomeGain();
+    this.synthesizeClickBuffers();
+    const buffer = accent ? this.clickBufferAccent : this.clickBufferRegular;
+    if (!buffer || !this.metronomeGain) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(this.metronomeGain);
+    try {
+      src.start(Math.max(when, this.ctx.currentTime));
+    } catch {
+      // start() can throw if `when` is invalid — skip silently
+    }
   }
 
   /**

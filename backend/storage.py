@@ -14,6 +14,18 @@ from pathlib import Path
 from typing import Optional
 
 
+def r2_status() -> dict:
+    """Inspect which R2 env vars are set — used by /api/v1/_diag for debugging."""
+    return {
+        "bucket": bool(os.environ.get("R2_BUCKET", "").strip()),
+        "account_id": bool(os.environ.get("R2_ACCOUNT_ID", "").strip()),
+        "access_key_id": bool(os.environ.get("R2_ACCESS_KEY_ID", "").strip()),
+        "secret_access_key": bool(os.environ.get("R2_SECRET_ACCESS_KEY", "").strip()),
+        "public_url_base": (os.environ.get("R2_PUBLIC_URL_BASE", "").strip()
+                            or "(missing)"),
+    }
+
+
 def _r2_config() -> Optional[tuple]:
     """Return (client, bucket) if R2 is wired up, else None."""
     bucket = os.environ.get("R2_BUCKET", "").strip()
@@ -21,6 +33,11 @@ def _r2_config() -> Optional[tuple]:
     access_key = os.environ.get("R2_ACCESS_KEY_ID", "").strip()
     secret_key = os.environ.get("R2_SECRET_ACCESS_KEY", "").strip()
     if not (bucket and account_id and access_key and secret_key):
+        missing = [k for k, v in {
+            "R2_BUCKET": bucket, "R2_ACCOUNT_ID": account_id,
+            "R2_ACCESS_KEY_ID": access_key, "R2_SECRET_ACCESS_KEY": secret_key,
+        }.items() if not v]
+        print(f"[storage] R2 NOT configured (missing env vars: {missing})")
         return None
     try:
         import boto3
@@ -47,6 +64,7 @@ def save_song_meta(song_id: str, meta: dict, local_path: Path) -> None:
 
     cfg = _r2_config()
     if not cfg:
+        print(f"[storage] LOCAL-ONLY save_song_meta({song_id}) — not on R2 (no config)")
         return
     client, bucket = cfg
     try:
@@ -56,9 +74,41 @@ def save_song_meta(song_id: str, meta: dict, local_path: Path) -> None:
             Body=json.dumps(meta, indent=2).encode("utf-8"),
             ContentType="application/json",
         )
+        print(f"[storage] R2 saved song_meta.json for {song_id}")
     except Exception as e:
         # Don't fail the import just because R2 is unreachable.
         print(f"[storage] R2 save_song_meta({song_id}) failed: {e}")
+
+
+def save_song_cover_art(song_id: str, source_url: str, local_path: Path) -> str | None:
+    """Download album art from a URL, save locally + R2, return the public R2 URL."""
+    import urllib.request
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        urllib.request.urlretrieve(source_url, local_path)
+    except Exception as e:
+        print(f"[storage] cover download from {source_url[:80]} failed: {e}")
+        return None
+
+    cfg = _r2_config()
+    if not cfg:
+        return None
+    client, bucket = cfg
+    public_base = os.environ.get("R2_PUBLIC_URL_BASE", "").strip().rstrip("/")
+    if not public_base:
+        return None
+    try:
+        client.upload_file(
+            Filename=str(local_path),
+            Bucket=bucket,
+            Key=f"songs/{song_id}/cover.jpg",
+            ExtraArgs={"ContentType": "image/jpeg"},
+        )
+        print(f"[storage] R2 saved cover.jpg for {song_id}")
+        return f"{public_base}/songs/{song_id}/cover.jpg"
+    except Exception as e:
+        print(f"[storage] R2 cover upload({song_id}) failed: {e}")
+        return None
 
 
 def save_song_lyrics(song_id: str, lyrics: dict, local_path: Path) -> None:
@@ -89,18 +139,23 @@ def sync_metas_from_r2(local_songs_root: Path) -> int:
     """
     cfg = _r2_config()
     if not cfg:
+        print("[storage] sync_metas_from_r2: skipped (R2 not configured)")
         return 0
     client, bucket = cfg
     local_songs_root.mkdir(parents=True, exist_ok=True)
     hydrated = 0
+    seen_objects = 0
     try:
         paginator = client.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=bucket, Prefix="songs/"):
             for obj in page.get("Contents", []):
+                seen_objects += 1
                 key = obj["Key"]
-                # We only care about song_meta.json and lyrics.json — stems
-                # don't need to be on Render's disk (served from R2 via 302).
-                if not (key.endswith("/song_meta.json") or key.endswith("/lyrics.json")):
+                # We hydrate song_meta.json, lyrics.json, and cover.jpg —
+                # stems don't need a local copy (served from R2 via 302).
+                if not any(key.endswith(s) for s in (
+                    "/song_meta.json", "/lyrics.json", "/cover.jpg"
+                )):
                     continue
                 # key shape: songs/<song_id>/<filename>
                 parts = key.split("/")
@@ -118,6 +173,7 @@ def sync_metas_from_r2(local_songs_root: Path) -> int:
                     hydrated += 1
                 except Exception as e:
                     print(f"[storage] failed to hydrate {key}: {e}")
+        print(f"[storage] sync_metas_from_r2: scanned {seen_objects} R2 objects, hydrated {hydrated}")
     except Exception as e:
         print(f"[storage] sync_metas_from_r2 failed: {e}")
     return hydrated

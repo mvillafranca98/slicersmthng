@@ -1,5 +1,6 @@
 """Flask API routes for SlicerSmthng (PRD §9.2)."""
 import json
+import os
 import threading
 import uuid
 from pathlib import Path
@@ -8,7 +9,7 @@ from flask import Blueprint, request, jsonify, send_file
 from backend.config import get_storage
 from backend.utils import get_song_dir, sanitize_filename
 from backend.jobs import run_import, run_import_file
-from backend.storage import sync_metas_from_r2, save_song_meta, save_song_lyrics, delete_song_from_r2
+from backend.storage import sync_metas_from_r2, save_song_meta, save_song_lyrics, delete_song_from_r2, r2_status
 from backend.metadata import enrich_metadata
 from backend.data import (
     load_setlists,
@@ -68,9 +69,36 @@ def _list_songs():
             meta = json.load(f)
         notes = load_notes().get(meta["id"], "")
         meta["notes"] = notes
+        # Frontend always asks our backend for thumbnail; we redirect to R2
+        # cover.jpg (album art) if present, then YouTube thumbnail, then 404.
         meta["thumbnail_url"] = f"/api/v1/songs/{meta['id']}/thumbnail"
         out.append(meta)
     return sorted(out, key=lambda s: s.get("added_at", ""), reverse=True)
+
+
+# ----- Diag (used to debug deploy issues without screen-scraping logs) -----
+
+@api.route("/_diag")
+def diag():
+    """Operational status. Safe to expose — no secret values returned."""
+    songs_root = storage / "songs"
+    local_meta_count = 0
+    if songs_root.exists():
+        for song_dir in songs_root.iterdir():
+            if song_dir.is_dir() and (song_dir / "song_meta.json").exists():
+                local_meta_count += 1
+    return jsonify({
+        "storage_root": str(storage),
+        "songs_with_local_meta": local_meta_count,
+        "r2": r2_status(),
+        "separator": (
+            "modal" if os.environ.get("STEM_SEPARATOR", "").lower() == "modal"
+            else "replicate"
+        ),
+        "modal_url_set": bool(os.environ.get("MODAL_DEMUCS_URL", "").strip()),
+        "ytdlp_proxy_set": bool(os.environ.get("YT_DLP_PROXY", "").strip()),
+        "ytdlp_cookies_set": bool(os.environ.get("YT_DLP_COOKIES_B64", "").strip()),
+    })
 
 # ----- Import & Jobs -----
 
@@ -348,11 +376,29 @@ def get_song_lyrics(song_id):
 
 @api.route("/songs/<song_id>/thumbnail")
 def song_thumbnail(song_id):
+    """Album art > YouTube thumbnail > 404 (frontend falls back to a Music icon)."""
+    from flask import redirect
     song_dir = get_song_dir(storage, song_id)
+    meta_path = song_dir / "song_meta.json"
+    if meta_path.exists():
+        try:
+            with open(meta_path) as f:
+                meta = json.load(f)
+            cover = meta.get("cover_url")
+            if cover:
+                return redirect(cover, code=302)
+        except Exception:
+            pass
+    # Local cover.jpg fallback (when R2 isn't configured but iTunes still hit)
+    local_cover = song_dir / "cover.jpg"
+    if local_cover.exists():
+        return send_file(local_cover, mimetype="image/jpeg")
+    # Legacy YouTube thumbnail
     thumb = song_dir / "thumbnail.jpg"
-    if not thumb.exists():
-        return jsonify({"error": "No thumbnail"}), 404
-    return send_file(thumb, mimetype="image/jpeg")
+    if thumb.exists():
+        return send_file(thumb, mimetype="image/jpeg")
+    return jsonify({"error": "No thumbnail"}), 404
+
 
 @api.route("/songs/<song_id>/reprocess", methods=["POST"])
 def reprocess_song(song_id):

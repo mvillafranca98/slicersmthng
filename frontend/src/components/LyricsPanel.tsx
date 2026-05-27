@@ -89,14 +89,13 @@ export function LyricsPanel() {
     return i;
   }, [syncedLines, currentTime]);
 
-  // Auto-scroll active line into view
+  // Auto-scroll active line so it stays centered as it advances.
   useEffect(() => {
     const el = activeRef.current;
-    const container = containerRef.current;
-    if (!el || !container) return;
-    const elTop = el.offsetTop;
-    const targetScroll = elTop - container.clientHeight / 2 + el.clientHeight / 2;
-    container.scrollTo({ top: targetScroll, behavior: 'smooth' });
+    if (!el) return;
+    // scrollIntoView with block:'center' is the most reliable cross-browser way
+    // to keep an element vertically centered in its scrolling ancestor.
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }, [activeIdx]);
 
   if (!currentSong) return null;

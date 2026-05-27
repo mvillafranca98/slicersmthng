@@ -1,5 +1,7 @@
-import { ChevronsUp, Pause, Play, Repeat, Rewind, FastForward, SkipBack, SkipForward, Volume2 } from 'lucide-react';
+import { useState } from 'react';
+import { ChevronsUp, Music2, Pause, Play, Repeat, Rewind, FastForward, SkipBack, SkipForward, Volume2 } from 'lucide-react';
 import { usePlayerStore } from '../stores/playerStore';
+import { useLibraryStore } from '../stores/libraryStore';
 import { useAudioEngine } from '../hooks/useAudioEngine';
 import { audioEngine } from '../lib/audioEngine';
 import { api } from '../api';
@@ -23,8 +25,31 @@ export function PlayerBar() {
     setExpanded,
     loopActive,
     setLoopActive,
+    activeSetlist,
+    queueIndex,
+    setActiveSetlist,
+    setCurrentSong,
   } = usePlayerStore();
+  const librarySongs = useLibraryStore((s) => s.songs);
+  const [imgError, setImgError] = useState(false);
   const seek = (t: number) => audioEngine.seek(t);
+
+  const goToPrev = () => {
+    if (currentTime > 3) { seek(0); return; }
+    if (!activeSetlist || queueIndex <= 0) { seek(0); return; }
+    const prevEntry = activeSetlist.songs[queueIndex - 1];
+    const song = librarySongs.find((s) => s.id === prevEntry?.song_id);
+    if (song) { setActiveSetlist(activeSetlist, queueIndex - 1); setCurrentSong(song); }
+    else seek(0);
+  };
+  const goToNext = () => {
+    if (!activeSetlist || queueIndex >= (activeSetlist.songs.length - 1)) return;
+    const nextEntry = activeSetlist.songs[queueIndex + 1];
+    const song = librarySongs.find((s) => s.id === nextEntry?.song_id);
+    if (song) { setActiveSetlist(activeSetlist, queueIndex + 1); setCurrentSong(song); }
+  };
+  const hasPrev = currentTime > 3 || (activeSetlist != null && queueIndex > 0);
+  const hasNext = activeSetlist != null && queueIndex < (activeSetlist.songs.length - 1);
   useAudioEngine();
 
   if (!currentSong) {
@@ -41,7 +66,18 @@ export function PlayerBar() {
   return (
     <div className="fixed bottom-0 inset-x-0 h-20 glass border-t border-white/5 flex items-center gap-4 px-4 z-[100]">
       <div className="flex items-center gap-3 w-64 shrink-0 min-w-0">
-        <img src={thumb} alt="" className="w-12 h-12 rounded-lg object-cover ring-1 ring-white/10" />
+        {!imgError ? (
+          <img
+            src={thumb}
+            alt=""
+            className="w-12 h-12 rounded-lg object-cover ring-1 ring-white/10"
+            onError={() => setImgError(true)}
+          />
+        ) : (
+          <div className="w-12 h-12 rounded-lg ring-1 ring-white/10 grid place-items-center bg-gradient-to-br from-bg-elevated to-bg-deepest shrink-0">
+            <Music2 className="w-5 h-5 text-text-muted" />
+          </div>
+        )}
         <div className="min-w-0">
           <p className="font-medium text-text-primary truncate text-sm">{currentSong.title}</p>
           <p className="text-xs text-text-secondary truncate">{currentSong.artist}</p>
@@ -58,7 +94,13 @@ export function PlayerBar() {
 
       <div className="flex-1 flex flex-col gap-1.5 min-w-0 max-w-3xl mx-auto">
         <div className="flex items-center justify-center gap-1">
-          <TransportButton aria-label="Previous"><SkipBack className="w-4 h-4" /></TransportButton>
+          <TransportButton
+            aria-label={currentTime > 3 ? 'Restart song' : 'Previous song'}
+            disabled={!hasPrev}
+            onClick={goToPrev}
+          >
+            <SkipBack className="w-4 h-4" />
+          </TransportButton>
           <TransportButton aria-label="Rewind 10 seconds" onClick={() => seek(Math.max(0, currentTime - 10))}>
             <Rewind className="w-4 h-4" />
           </TransportButton>
@@ -73,7 +115,9 @@ export function PlayerBar() {
           <TransportButton aria-label="Forward 10 seconds" onClick={() => seek(Math.min(duration, currentTime + 10))}>
             <FastForward className="w-4 h-4" />
           </TransportButton>
-          <TransportButton aria-label="Next"><SkipForward className="w-4 h-4" /></TransportButton>
+          <TransportButton aria-label="Next song" disabled={!hasNext} onClick={goToNext}>
+            <SkipForward className="w-4 h-4" />
+          </TransportButton>
         </div>
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-mono text-text-muted w-10 text-right tabular-nums">{formatTime(currentTime)}</span>
@@ -139,13 +183,20 @@ export function PlayerBar() {
 function TransportButton({
   children,
   onClick,
+  disabled,
+  className,
   ...rest
 }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="h-9 w-9 grid place-items-center rounded-lg text-text-secondary hover:text-text-primary hover:bg-white/[0.04] transition-colors"
+      disabled={disabled}
+      className={cn(
+        'h-9 w-9 grid place-items-center rounded-lg text-text-secondary hover:text-text-primary hover:bg-white/[0.04] transition-colors',
+        disabled && 'opacity-30 cursor-not-allowed hover:bg-transparent hover:text-text-secondary',
+        className,
+      )}
       {...rest}
     >
       {children}
