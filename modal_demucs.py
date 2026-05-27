@@ -58,7 +58,6 @@ image = (
         "torchaudio>=2.0.0",
         "soundfile>=0.12.0",
         "librosa>=0.10.0",
-        "autochord>=0.1.0",  # NEW: chord detection (uses madmom under the hood)
         "fastapi[standard]",
         "boto3>=1.34",
     )
@@ -137,26 +136,12 @@ def separate(req: dict) -> dict:
     except Exception:
         pass  # analysis is best-effort; defaults are fine
 
-    # --- Chord detection (autochord, best-effort) ---
-    # Returns a list of {time: float seconds, chord: str like 'C', 'Am', 'F#m7'}.
-    # Falls back to empty on any failure — chord strip just stays empty.
-    chord_events: list = []
-    try:
-        import autochord
-        # autochord.recognize returns list of (start_sec, end_sec, chord_label)
-        raw = autochord.recognize(str(in_path))
-        for entry in raw:
-            try:
-                start = float(entry[0])
-                label = str(entry[2]).strip()
-            except Exception:
-                continue
-            if not label or label.lower() in ("n", "no chord", "x"):
-                # skip "no chord" placeholders
-                continue
-            chord_events.append({"time": start, "chord": label})
-    except Exception as e:
-        print(f"[chord-detection] failed: {e}")
+    # --- Chord detection (librosa-based, best-effort) ---
+    # Returns a list of {time: float seconds, chord: str like 'C', 'Am'}.
+    # We sidestep autochord/madmom/vamp dependency hell by doing template
+    # matching against librosa's chroma features directly. Less accurate
+    # than autochord on jazz/dense mixes, but solid for pop/rock.
+    chord_events: list = _detect_chords_via_librosa(in_path)
 
     # --- Demucs separation ---
     proc = subprocess.run(
@@ -228,3 +213,80 @@ def separate(req: dict) -> dict:
         "format": audio_format,
         "song_id": song_id,
     }
+
+
+# ---------------------------------------------------------------------------
+# Chord detection (librosa-only, dependency-free)
+# ---------------------------------------------------------------------------
+
+def _detect_chords_via_librosa(audio_path) -> list:
+    """Template-match 24 major/minor chords against the song's chroma profile.
+
+    Algorithm:
+      1. Compute chroma_cqt (12-bin pitch-class energy over time)
+      2. For each frame, find the major-or-minor chord template with the
+         highest dot product after normalization
+      3. Emit a {time, chord} event whenever the recognized chord changes
+         (with hysteresis so we don't emit dozens of micro-changes per second)
+
+    Limitations: only major + minor triads. Doesn't recognize 7ths, sus,
+    diminished. Good enough for chord-strip practice display on pop/rock.
+    """
+    try:
+        import librosa
+        import numpy as np
+    except Exception as e:
+        print(f"[chord-detection] librosa/numpy import failed: {e}")
+        return []
+
+    try:
+        # Stereo → mono, sample rate fixed for consistent chroma resolution.
+        y, sr = librosa.load(str(audio_path), sr=22050, mono=True)
+        # ~512 hop @ 22050 = ~23 ms per frame; smooth over a few frames for stability.
+        hop = 512
+        chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=hop)
+        # Median-filter the chroma over ~1.5 sec to suppress transients.
+        from scipy.ndimage import median_filter
+        chroma = median_filter(chroma, size=(1, 64))
+        times = librosa.frames_to_time(np.arange(chroma.shape[1]), sr=sr, hop_length=hop)
+    except Exception as e:
+        print(f"[chord-detection] chroma extraction failed: {e}")
+        return []
+
+    note_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+    # Triad templates — root, third, fifth — with the third differing maj vs min.
+    major_template = np.array([1.0, 0, 0, 0, 1.0, 0, 0, 1.0, 0, 0, 0, 0])
+    minor_template = np.array([1.0, 0, 0, 1.0, 0, 0, 0, 1.0, 0, 0, 0, 0])
+    # Pre-rotate the 24 templates for fast matrix multiply.
+    templates = np.stack(
+        [np.roll(major_template, r) for r in range(12)]
+        + [np.roll(minor_template, r) for r in range(12)],
+        axis=0,
+    )  # shape (24, 12)
+    template_labels = (
+        [note_names[r] for r in range(12)]
+        + [f"{note_names[r]}m" for r in range(12)]
+    )
+
+    # Normalize each chroma column to unit length, then dot with templates.
+    norms = np.linalg.norm(chroma, axis=0) + 1e-6
+    chroma_norm = chroma / norms
+    scores = templates @ chroma_norm  # (24, frames)
+    winners = np.argmax(scores, axis=0)
+    confidences = scores[winners, np.arange(scores.shape[1])]
+
+    events: list = []
+    last_chord = None
+    last_time = -10.0
+    MIN_GAP = 0.25  # don't emit chord changes faster than ~4 per second
+    MIN_CONF = 0.55  # ignore "noisy" frames
+    for i, w in enumerate(winners):
+        if confidences[i] < MIN_CONF:
+            continue
+        label = template_labels[int(w)]
+        t = float(times[i])
+        if label != last_chord and (t - last_time) >= MIN_GAP:
+            events.append({"time": round(t, 3), "chord": label})
+            last_chord = label
+            last_time = t
+    return events
