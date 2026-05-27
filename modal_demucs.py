@@ -58,6 +58,7 @@ image = (
         "torchaudio>=2.0.0",
         "soundfile>=0.12.0",
         "librosa>=0.10.0",
+        "autochord>=0.1.0",  # NEW: chord detection (uses madmom under the hood)
         "fastapi[standard]",
         "boto3>=1.34",
     )
@@ -136,6 +137,27 @@ def separate(req: dict) -> dict:
     except Exception:
         pass  # analysis is best-effort; defaults are fine
 
+    # --- Chord detection (autochord, best-effort) ---
+    # Returns a list of {time: float seconds, chord: str like 'C', 'Am', 'F#m7'}.
+    # Falls back to empty on any failure — chord strip just stays empty.
+    chord_events: list = []
+    try:
+        import autochord
+        # autochord.recognize returns list of (start_sec, end_sec, chord_label)
+        raw = autochord.recognize(str(in_path))
+        for entry in raw:
+            try:
+                start = float(entry[0])
+                label = str(entry[2]).strip()
+            except Exception:
+                continue
+            if not label or label.lower() in ("n", "no chord", "x"):
+                # skip "no chord" placeholders
+                continue
+            chord_events.append({"time": start, "chord": label})
+    except Exception as e:
+        print(f"[chord-detection] failed: {e}")
+
     # --- Demucs separation ---
     proc = subprocess.run(
         ["demucs", "-n", model, fmt_flag, "--mp3-bitrate", "320",
@@ -186,6 +208,7 @@ def separate(req: dict) -> dict:
             "stems_urls": stems_urls,
             "bpm": bpm,
             "duration": duration_sec,
+            "chords": chord_events,
             "model": model,
             "format": audio_format,
             "song_id": song_id,
@@ -200,6 +223,7 @@ def separate(req: dict) -> dict:
         "stems": stems_b64,
         "bpm": bpm,
         "duration": duration_sec,
+        "chords": chord_events,
         "model": model,
         "format": audio_format,
         "song_id": song_id,

@@ -59,6 +59,8 @@ export function PlayerExpanded() {
     setLoopActive,
     tempoPercent,
     setTempoPercent,
+    pitchSemitones,
+    setPitchSemitones,
     metronomeEnabled,
     setMetronomeEnabled,
     metronomeVolume,
@@ -334,7 +336,54 @@ export function PlayerExpanded() {
                 </button>
               ))}
             </div>
-            <p className="mt-2 text-[11px] text-text-muted">Pitch shifts with speed (pitch-neutral stretch is queued for the next session).</p>
+            <p className="mt-2 text-[11px] text-text-muted">Pitch-neutral — slowing down keeps the original key.</p>
+
+            {/* Pitch shift (independent of tempo) */}
+            <div className="mt-4">
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted">Pitch (key)</div>
+                <button
+                  type="button"
+                  onClick={() => setPitchSemitones(0)}
+                  disabled={pitchSemitones === 0}
+                  className="text-[10px] text-text-muted hover:text-text-primary disabled:opacity-30"
+                >
+                  reset
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPitchSemitones(pitchSemitones - 1)}
+                  className="h-8 w-8 grid place-items-center rounded-lg bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary font-mono"
+                  aria-label="Pitch down 1 semitone"
+                >
+                  −
+                </button>
+                <input
+                  type="range"
+                  min={-12}
+                  max={12}
+                  step={1}
+                  value={pitchSemitones}
+                  onChange={(e) => setPitchSemitones(Number(e.target.value))}
+                  aria-label="Pitch in semitones"
+                  className="flex-1"
+                />
+                <button
+                  type="button"
+                  onClick={() => setPitchSemitones(pitchSemitones + 1)}
+                  className="h-8 w-8 grid place-items-center rounded-lg bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary font-mono"
+                  aria-label="Pitch up 1 semitone"
+                >
+                  +
+                </button>
+                <span className="text-xs font-mono text-text-primary w-12 text-right tabular-nums">
+                  {pitchSemitones > 0 ? `+${pitchSemitones}` : pitchSemitones} st
+                </span>
+              </div>
+              <p className="mt-1 text-[10px] text-text-muted">±12 semitones = ±1 octave. Quality starts to degrade past ±6.</p>
+            </div>
 
             {/* Metronome controls */}
             <div className="mt-4 rounded-xl bg-bg-card/60 border border-white/5 p-3">

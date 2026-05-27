@@ -91,7 +91,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   setDuration: (d) => set({ duration: d }),
   setMasterVolume: (v) => set({ masterVolume: Math.max(0, Math.min(1, v)) }),
   setTempoPercent: (p) => set({ tempoPercent: Math.max(50, Math.min(120, p)) }),
-  setPitchSemitones: (s) => set({ pitchSemitones: Math.max(-6, Math.min(6, s)) }),
+  setPitchSemitones: (s) => set({ pitchSemitones: Math.max(-12, Math.min(12, s)) }),
   setLoopA: (t) => set({ loopA: t }),
   setLoopB: (t) => set({ loopB: t }),
   setLoopActive: (v) => set({ loopActive: v }),

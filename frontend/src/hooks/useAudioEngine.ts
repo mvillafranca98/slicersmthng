@@ -13,6 +13,7 @@ export function useAudioEngine() {
   const masterVolume = usePlayerStore((s) => s.masterVolume);
   const stems = usePlayerStore((s) => s.stems);
   const tempoPercent = usePlayerStore((s) => s.tempoPercent);
+  const pitchSemitones = usePlayerStore((s) => s.pitchSemitones);
   const metronomeVolume = usePlayerStore((s) => s.metronomeVolume);
 
   // Load stems on song change. Songs without stems become a no-op load.
@@ -62,4 +63,9 @@ export function useAudioEngine() {
   useEffect(() => {
     audioEngine.setTempo(tempoPercent);
   }, [tempoPercent]);
+
+  // Pitch shift (independent of tempo — uses GrainPlayer detune)
+  useEffect(() => {
+    audioEngine.setPitchSemitones(pitchSemitones);
+  }, [pitchSemitones]);
 }
