@@ -9,6 +9,7 @@ from pathlib import Path
 from backend.utils import make_song_id
 from backend.analysis import analyze_audio
 from backend.storage import save_song_meta
+from backend.metadata import enrich_metadata
 
 # Demucs stem names per model (PRD)
 MODEL_STEMS = {
@@ -325,10 +326,23 @@ def _process_audio_to_stems(
             p.stem for p in stems_dir.glob("*.*")
             if p.suffix.lower() in (".mp3", ".wav", ".flac")
         ]
+
+    # Best-effort title + artist enrichment via MusicBrainz. Fixes messy
+    # filenames like "R U Mine_" → "R U Mine?" by Arctic Monkeys. Free,
+    # ~80% success on popular music, falls back silently to the raw values
+    # for tracks MusicBrainz doesn't recognize.
+    raw_title = meta_overrides.get("title", "unknown")
+    raw_artist = meta_overrides.get("artist", "Unknown")
+    enriched = enrich_metadata(raw_title, raw_artist)
+
     meta = {
         "id": song_id,
-        "title": meta_overrides.get("title", "unknown"),
-        "artist": meta_overrides.get("artist", "Unknown"),
+        "title": enriched.get("title") or raw_title,
+        "artist": enriched.get("artist") or raw_artist,
+        "title_original": raw_title,           # keep the originals around
+        "artist_original": raw_artist,         # so user can see what was changed
+        "metadata_source": enriched.get("source", "original"),
+        "metadata_confidence": enriched.get("confidence", 0),
         "duration": duration_sec,
         "bpm": bpm,
         "key": key,

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Music, Search } from 'lucide-react';
+import { toast } from 'sonner';
 import { usePlayerStore } from '../stores/playerStore';
+import { useLibraryStore } from '../stores/libraryStore';
 import { audioEngine } from '../lib/audioEngine';
 import { api } from '../api';
 import { cn } from '../lib/cn';
@@ -54,6 +56,18 @@ export function LyricsPanel() {
     try {
       const res = await api.lyrics(currentSong.id);
       setData(res);
+      // Backend may have auto-corrected the song's title/artist via MusicBrainz
+      // as a side effect. If so, update the player display and refresh the
+      // library so the card shows the right name everywhere.
+      const newTitle = (res as { title?: string }).title;
+      const newArtist = (res as { artist?: string }).artist;
+      if (newTitle && (newTitle !== currentSong.title || newArtist !== currentSong.artist)) {
+        usePlayerStore.getState().setCurrentSong({ ...currentSong, title: newTitle, artist: newArtist || currentSong.artist });
+        useLibraryStore.getState().fetchSongs();
+        toast.success('Title corrected', {
+          description: `${newArtist || currentSong.artist} — ${newTitle}`,
+        });
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {

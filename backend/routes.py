@@ -8,7 +8,8 @@ from flask import Blueprint, request, jsonify, send_file
 from backend.config import get_storage
 from backend.utils import get_song_dir, sanitize_filename
 from backend.jobs import run_import, run_import_file
-from backend.storage import sync_metas_from_r2, save_song_lyrics, delete_song_from_r2
+from backend.storage import sync_metas_from_r2, save_song_meta, save_song_lyrics, delete_song_from_r2
+from backend.metadata import enrich_metadata
 from backend.data import (
     load_setlists,
     save_setlists,
@@ -278,6 +279,34 @@ def get_song_lyrics(song_id):
     if not title:
         return jsonify({"error": "No title in song meta — can't search lyrics"}), 400
 
+    # If this song hasn't been MusicBrainz-enriched yet (or the previous
+    # match was low-confidence), do it now. Bad filenames usually have bad
+    # lyric search results too; correcting the metadata here makes "Find
+    # lyrics" work as a one-click clean-up for older imports.
+    already_enriched = (
+        meta.get("metadata_source") == "musicbrainz"
+        and int(meta.get("metadata_confidence") or 0) >= 75
+    )
+    if not already_enriched:
+        enriched = enrich_metadata(title, artist if artist.lower() != "uploaded" else "")
+        if enriched.get("source") == "musicbrainz":
+            # Persist the correction back to both local and R2
+            meta["title_original"] = meta.get("title_original") or title
+            meta["artist_original"] = meta.get("artist_original") or artist
+            meta["title"] = enriched["title"]
+            meta["artist"] = enriched["artist"]
+            meta["metadata_source"] = enriched["source"]
+            meta["metadata_confidence"] = enriched["confidence"]
+            save_song_meta(song_id, meta, meta_path)
+            title = enriched["title"]
+            artist = enriched["artist"]
+            # Invalidate cached lyrics — they were searched with bad metadata
+            try:
+                if (song_dir / "lyrics.json").exists():
+                    (song_dir / "lyrics.json").unlink()
+            except OSError:
+                pass
+
     params = {"track_name": title, "artist_name": artist}
     if duration > 0:
         params["duration"] = str(duration)
@@ -312,7 +341,9 @@ def get_song_lyrics(song_id):
 
     # Cache (both locally and on R2)
     save_song_lyrics(song_id, result, lyrics_path)
-    return jsonify(result)
+    # Echo back the (possibly corrected) title + artist so the frontend can
+    # update what it's showing without a full song re-fetch.
+    return jsonify({**result, "title": title, "artist": artist})
 
 
 @api.route("/songs/<song_id>/thumbnail")
