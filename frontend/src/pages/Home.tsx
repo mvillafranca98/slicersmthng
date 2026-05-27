@@ -3,8 +3,10 @@ import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { ListMusic, Plus, Disc3 } from 'lucide-react';
 import { SongCard } from '../components/SongCard';
+import { PendingCard } from '../components/PendingCard';
 import { useLibraryStore } from '../stores/libraryStore';
 import { useSetlistStore } from '../stores/setlistStore';
+import { useJobStore } from '../stores/jobStore';
 
 const STEM_COLORS = ['#FF6B8A', '#FFB347', '#00E5C3', '#5BDB6B', '#C47FFF', '#8899AA'];
 
@@ -13,6 +15,10 @@ export function Home() {
   const fetchSongs = useLibraryStore(s => s.fetchSongs);
   const setlists = useSetlistStore(s => s.setlists);
   const fetchSetlists = useSetlistStore(s => s.fetchSetlists);
+  const jobs = useJobStore((s) => s.jobs);
+  const pendingJobs = Object.values(jobs).filter(
+    (j) => j.status === 'pending' || j.status === 'running' || j.status === 'error',
+  );
 
   useEffect(() => {
     fetchSongs();
@@ -24,8 +30,13 @@ export function Home() {
   return (
     <div className="space-y-10 max-w-7xl">
       <section>
-        <SectionHeader title="Recent songs" subtitle="Your last 5 imports" />
-        {recent.length === 0 ? (
+        <SectionHeader
+          title="Recent songs"
+          subtitle={pendingJobs.length
+            ? `${pendingJobs.length} importing · last 5 finished`
+            : 'Your last 5 imports'}
+        />
+        {recent.length === 0 && pendingJobs.length === 0 ? (
           <EmptyLibrary />
         ) : (
           <motion.div
@@ -34,6 +45,15 @@ export function Home() {
             variants={{ hidden: {}, show: { transition: { staggerChildren: 0.05 } } }}
             className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4"
           >
+            {pendingJobs.map((j) => (
+              <motion.div
+                key={j.job_id}
+                variants={{ hidden: { opacity: 0, y: 8 }, show: { opacity: 1, y: 0 } }}
+                transition={{ duration: 0.25 }}
+              >
+                <PendingCard job={j} />
+              </motion.div>
+            ))}
             {recent.map(song => (
               <motion.div
                 key={song.id}

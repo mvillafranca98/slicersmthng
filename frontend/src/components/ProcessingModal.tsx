@@ -20,10 +20,16 @@ const STEM_BANDS = ['#FF6B8A', '#FFB347', '#00E5C3', '#5BDB6B', '#C47FFF', '#889
 export function ProcessingModal() {
   const jobs = useJobStore(s => s.jobs);
   const removeJob = useJobStore(s => s.removeJob);
+  const dismissJob = useJobStore(s => s.dismissJob);
 
-  const running = Object.entries(jobs).find(([, j]) => j.status === 'running' || j.status === 'pending');
-  const lastError = Object.entries(jobs).find(([, j]) => j.status === 'error');
-  const lastDone = Object.entries(jobs).find(([, j]) => j.status === 'done');
+  // Skip jobs the user has explicitly dismissed in every state — once you
+  // close the modal, it stays closed. The pending card in the library shows
+  // continuing progress / errors; toasts confirm completion.
+  const running = Object.entries(jobs).find(([, j]) =>
+    (j.status === 'running' || j.status === 'pending') && !j.dismissed
+  );
+  const lastError = Object.entries(jobs).find(([, j]) => j.status === 'error' && !j.dismissed);
+  const lastDone = Object.entries(jobs).find(([, j]) => j.status === 'done' && !j.dismissed);
 
   // Show running > error > done. Auto-dismiss "done" after 2.5s.
   const [showDone, setShowDone] = useState<string | null>(null);
@@ -83,7 +89,12 @@ export function ProcessingModal() {
             )}
 
             {isRunning && (
-              <RunningView stageIdx={stageIdx} percent={percent} message={job.message || ''} />
+              <RunningView
+                stageIdx={stageIdx}
+                percent={percent}
+                message={job.message || ''}
+                onDismiss={() => dismissJob(jobId)}
+              />
             )}
           </div>
         </motion.div>
@@ -131,11 +142,26 @@ function StemBandsHeader({ active, progress }: { active: boolean; progress: numb
   );
 }
 
-function RunningView({ stageIdx, percent, message }: { stageIdx: number; percent: number; message: string }) {
+function RunningView({ stageIdx, percent, message, onDismiss }: {
+  stageIdx: number; percent: number; message: string; onDismiss: () => void;
+}) {
   return (
     <>
-      <h3 className="text-lg font-semibold text-text-primary">Slicing…</h3>
-      <p className="text-text-secondary text-sm mt-1">{message || 'Processing your track on a cloud GPU.'}</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-semibold text-text-primary">Slicing…</h3>
+          <p className="text-text-secondary text-sm mt-1">{message || 'Processing your track on a cloud GPU.'}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss — keep slicing in the background"
+          title="Dismiss — slicing continues, watch progress in the library"
+          className="-mt-1 -mr-1 h-8 w-8 grid place-items-center rounded-md text-text-muted hover:text-text-primary hover:bg-white/[0.04]"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
 
       <ol className="mt-5 space-y-1.5">
         {STAGES.map((stage, i) => {

@@ -1,16 +1,24 @@
 import { useEffect } from 'react';
 import { SongCard } from '../components/SongCard';
+import { PendingCard } from '../components/PendingCard';
 import { useLibraryStore } from '../stores/libraryStore';
 import { usePlayerStore } from '../stores/playerStore';
+import { useJobStore } from '../stores/jobStore';
 
 export function Library() {
   const { filteredSongs, fetchSongs, isLoading, searchQuery, setSearchQuery, viewMode, setViewMode } = useLibraryStore();
+  const jobs = useJobStore((s) => s.jobs);
 
   useEffect(() => {
     fetchSongs();
   }, [fetchSongs]);
 
   const songs = filteredSongs();
+  // Jobs that don't (yet) have a song to display — show them as pending cards
+  // at the top so users can watch in-flight imports without staring at the modal.
+  const pendingJobs = Object.values(jobs).filter(
+    (j) => j.status === 'pending' || j.status === 'running' || j.status === 'error',
+  );
 
   return (
     <div className="space-y-4">
@@ -76,6 +84,9 @@ export function Library() {
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
+          {pendingJobs.map((j) => (
+            <PendingCard key={j.job_id} job={j} />
+          ))}
           {songs.map(song => (
             <SongCard key={song.id} song={song} />
           ))}

@@ -62,4 +62,9 @@ export interface Job {
   message?: string;
   result?: Song;
   error?: string;
+  /** Human-readable label for in-progress display in library cards. */
+  title?: string;
+  /** Set when the user X'd the processing modal — modal stays hidden for this job.
+   *  The job itself keeps running server-side. */
+  dismissed?: boolean;
 }

@@ -9,6 +9,23 @@ import { api } from '../api';
 import { cn } from '../lib/cn';
 
 const API_BASE = import.meta.env.DEV ? '' : window.location.origin;
+
+/** Pull a display title out of a URL — e.g. "youtube.com/watch?v=..." → "YouTube · ..." */
+function prettyUrlTitle(url: string): string {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, '').split('.')[0];
+    return `${host.charAt(0).toUpperCase() + host.slice(1)} · ${u.pathname.split('/').pop() || u.searchParams.get('v') || 'track'}`;
+  } catch {
+    return url.slice(0, 80);
+  }
+}
+
+/** Trim .mp3 / .wav / etc and use the same "Artist - Title" heuristics as the backend. */
+function prettyFileTitle(filename: string): string {
+  const stem = filename.replace(/\.[^.]+$/, '');
+  return stem.replace(/^\s*\d{1,2}\s*[-.\s]\s*/, '');
+}
 let socket: ReturnType<typeof io> | null = null;
 function getSocket() {
   if (!socket) socket = io(API_BASE, { path: '/socket.io', transports: ['websocket', 'polling'] });
@@ -36,10 +53,10 @@ export function UrlBar() {
     }
   }, []);
 
-  const wireJob = useCallback((jobId: string, opts?: { silent?: boolean; label?: string }) => {
+  const wireJob = useCallback((jobId: string, opts?: { silent?: boolean; label?: string; title?: string }) => {
     const silent = opts?.silent;
     const label = opts?.label;
-    addJob(jobId);
+    addJob(jobId, opts?.title || label);
     const s = getSocket();
     s.on('job:progress', (data: { job_id: string; stage: string; percent: number; message: string }) => {
       if (data.job_id === jobId) updateJob(jobId, { status: 'running', stage: data.stage, percent: data.percent, message: data.message });
@@ -120,7 +137,7 @@ export function UrlBar() {
     setImporting(true);
     try {
       const { job_id } = await api.importUrl(u, model, format);
-      wireJob(job_id);
+      wireJob(job_id, { title: prettyUrlTitle(u) });
     } catch (e) {
       failJob(Object.keys(useJobStore.getState().jobs)[0] || 'unknown', (e as Error).message);
     } finally {
@@ -139,7 +156,7 @@ export function UrlBar() {
       await Promise.all(files.map(async (file) => {
         try {
           const { job_id } = await api.importFile(file, model, format);
-          wireJob(job_id, { silent: bulk, label: file.name });
+          wireJob(job_id, { silent: bulk, label: file.name, title: prettyFileTitle(file.name) });
         } catch (e) {
           if (bulk) {
             toast.error(`Upload failed: ${file.name}`, { description: (e as Error).message.slice(0, 140) });
