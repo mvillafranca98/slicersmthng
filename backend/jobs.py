@@ -201,7 +201,7 @@ def run_import_file(
     if not uploaded_path.exists():
         raise ValueError("Upload missing or already cleaned up.")
 
-    title = Path(original_filename).stem or "Uploaded track"
+    title, artist = _parse_filename_meta(original_filename)
     song_id = make_song_id(title)
     song_dir, stems_dir = _make_song_dirs(storage_root, song_id)
 
@@ -220,13 +220,44 @@ def run_import_file(
         audio_format=audio_format,
         meta_overrides={
             "title": title,
-            "artist": "Uploaded",
+            "artist": artist,
             "duration_hint": 0,
             "youtube_url": "",
             "thumbnail_url": "",
         },
         progress=progress,
     )
+
+
+def _parse_filename_meta(filename: str) -> tuple[str, str]:
+    """Pull artist + title out of common filename patterns.
+
+    Recognises:
+      "Artist - Title.mp3"                                  -> ("Title", "Artist")
+      "Artist - Title (Official Audio).mp3"                 -> ("Title", "Artist")
+      "Artist - Title [Official Music Video].mp3"           -> ("Title", "Artist")
+      "01 Artist - Title.mp3" (track-number prefix)         -> ("Title", "Artist")
+      "Title only.mp3"                                      -> ("Title only", "Uploaded")
+
+    LRCLib lyric search needs the actual artist string to match — leaving the
+    artist as "Uploaded" (the previous default) meant lyrics never resolved
+    for any user-uploaded file.
+    """
+    import re
+    stem = Path(filename).stem.strip()
+    # Strip leading track-number prefix: "01 - ", "01.", "01 "
+    stem = re.sub(r'^\s*\d{1,2}\s*[-.\s]\s*', '', stem)
+    # Strip trailing "(Official Audio/Video/...)" or "[Official ...]"
+    stem = re.sub(
+        r'\s*[\(\[][^()\[\]]*(?:official|audio|video|lyric|hd|hq|mv|remaster(?:ed)?|live)[^()\[\]]*[\)\]]\s*$',
+        '', stem, flags=re.I,
+    )
+    stem = stem.strip()
+
+    if ' - ' in stem:
+        a, t = stem.split(' - ', 1)
+        return t.strip(), a.strip()
+    return (stem or "Uploaded track"), "Uploaded"
 
 
 # ---------------------------------------------------------------------------

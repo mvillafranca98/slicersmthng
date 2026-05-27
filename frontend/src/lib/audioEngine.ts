@@ -198,11 +198,28 @@ class AudioEngine {
       this.metronomeGain.gain.value = 0.5;
       this.metronomeGain.connect(this.ctx.destination);
     }
-    const secondsPerBeat = 60 / this.metronomeBpm / this.tempo;
+
+    // If the metronome was just toggled on mid-playback, metronomeNextClickTime
+    // is stale (probably 0 or set when the song started before metronome was on).
+    // Resync to the current position so clicks start NOW rather than try to fire
+    // a thousand of them in the past (which audibly drops everything).
+    if (this.metronomeNextClickTime < this.ctx.currentTime - 0.05) {
+      const songPos = this.currentPosition();
+      const songBpm = Math.max(40, Math.min(240, state.currentSong?.bpm || 120));
+      this.metronomeBpm = songBpm;
+      const secondsPerBeatInSong = 60 / songBpm;
+      // Snap to the next whole beat at or after the current song position.
+      this.metronomeBeatIndex = Math.ceil(songPos / secondsPerBeatInSong);
+      const beatPosInSong = this.metronomeBeatIndex * secondsPerBeatInSong;
+      // Convert song time back to audio-clock time (accounts for tempo).
+      this.metronomeNextClickTime = this.ctx.currentTime + (beatPosInSong - songPos) / this.tempo;
+    }
+
+    const secondsPerBeatRealtime = 60 / this.metronomeBpm / this.tempo;
     const horizon = this.ctx.currentTime + 0.25;
     while (this.metronomeNextClickTime < horizon) {
       this.scheduleClick(this.metronomeNextClickTime, this.metronomeBeatIndex % 4 === 0);
-      this.metronomeNextClickTime += secondsPerBeat;
+      this.metronomeNextClickTime += secondsPerBeatRealtime;
       this.metronomeBeatIndex += 1;
     }
   }
