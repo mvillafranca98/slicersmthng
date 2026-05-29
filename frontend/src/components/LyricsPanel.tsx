@@ -8,6 +8,10 @@ import { audioEngine } from '../lib/audioEngine';
 import { api } from '../api';
 import { cn } from '../lib/cn';
 
+// Mark active line with this data-attribute so we can find it by querySelector
+// without juggling a moving ref (framer-motion + conditional refs are flaky).
+const ACTIVE_LINE_ATTR = 'data-active-lyric';
+
 interface LyricLine { time: number; text: string; }
 
 /** Parse LRC-format synced lyrics into [time, text] pairs. */
@@ -37,9 +41,6 @@ export function LyricsPanel() {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<Awaited<ReturnType<typeof api.lyrics>> | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // ref attaches to the active lyric line (a <button>), so this must be
-  // an HTMLButtonElement — production tsc -b catches the type mismatch.
-  const activeRef = useRef<HTMLButtonElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Reset state when the song changes
@@ -90,17 +91,29 @@ export function LyricsPanel() {
   }, [syncedLines, currentTime]);
 
   // Auto-scroll active line so it stays centered as it advances.
-  // We compute scrollTop manually rather than using scrollIntoView, which
-  // can scroll outer page/document containers in addition to the lyrics box.
+  //
+  // Implementation notes:
+  //   - We query the active line by data-attribute (set in the JSX below)
+  //     rather than chasing a moving React ref. The conditional-ref pattern
+  //     (`ref={isActive ? activeRef : null}`) interacts badly with
+  //     framer-motion's forwardRef and sometimes leaves activeRef null at
+  //     the moment the effect runs, so the panel didn't scroll at all.
+  //   - We use offsetTop math + container.scrollTo so only the lyrics
+  //     panel scrolls — never the outer page or the expanded-player body.
+  //   - rAF defers measurement one frame so framer-motion's scale animation
+  //     on the active line has reached its final transform before we read
+  //     offsetHeight (otherwise the center can drift by ~half a line).
   useEffect(() => {
-    const el = activeRef.current;
+    if (activeIdx < 0) return;
     const container = containerRef.current;
-    if (!el || !container) return;
-    const containerRect = container.getBoundingClientRect();
-    const elRect = el.getBoundingClientRect();
-    const offsetWithinContainer = elRect.top - containerRect.top + container.scrollTop;
-    const targetScroll = offsetWithinContainer - container.clientHeight / 2 + el.clientHeight / 2;
-    container.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' });
+    if (!container) return;
+    const raf = requestAnimationFrame(() => {
+      const el = container.querySelector<HTMLElement>(`[${ACTIVE_LINE_ATTR}]`);
+      if (!el) return;
+      const target = el.offsetTop - container.clientHeight / 2 + el.offsetHeight / 2;
+      container.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+    });
+    return () => cancelAnimationFrame(raf);
   }, [activeIdx]);
 
   if (!currentSong) return null;
@@ -193,7 +206,7 @@ export function LyricsPanel() {
             return (
               <motion.button
                 key={`${line.time}-${i}`}
-                ref={isActive ? activeRef : null}
+                {...(isActive ? { [ACTIVE_LINE_ATTR]: '' } : {})}
                 type="button"
                 onClick={() => audioEngine.seek(line.time)}
                 animate={{ opacity, scale: isActive ? 1.05 : 1 }}
