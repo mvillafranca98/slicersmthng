@@ -78,6 +78,69 @@ def _list_songs():
 
 # ----- Diag (used to debug deploy issues without screen-scraping logs) -----
 
+@api.route("/_diag/r2-list")
+def diag_r2_list():
+    """List up to 50 objects in the R2 bucket. Surfaces auth/permission problems
+    that the silent-fallback sync swallows."""
+    import os
+    bucket = os.environ.get("R2_BUCKET", "").strip()
+    account_id = os.environ.get("R2_ACCOUNT_ID", "").strip()
+    access_key = os.environ.get("R2_ACCESS_KEY_ID", "").strip()
+    secret_key = os.environ.get("R2_SECRET_ACCESS_KEY", "").strip()
+    if not (bucket and account_id and access_key and secret_key):
+        return jsonify({"error": "R2 env vars missing"}), 500
+    try:
+        import boto3
+        from botocore.client import Config
+        client = boto3.client(
+            "s3",
+            endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            config=Config(signature_version="s3v4"),
+            region_name="auto",
+        )
+        # First: list all objects (no prefix) so we can see what's there
+        resp_all = client.list_objects_v2(Bucket=bucket, MaxKeys=50)
+        all_keys = [obj["Key"] for obj in resp_all.get("Contents", [])]
+        # Then: list with the songs/ prefix specifically
+        resp_songs = client.list_objects_v2(Bucket=bucket, Prefix="songs/", MaxKeys=50)
+        songs_keys = [obj["Key"] for obj in resp_songs.get("Contents", [])]
+        # Filter to meta-type files
+        meta_keys = [k for k in songs_keys if k.endswith("song_meta.json")]
+        return jsonify({
+            "ok": True,
+            "bucket": bucket,
+            "total_count_all": resp_all.get("KeyCount", 0),
+            "total_count_songs_prefix": resp_songs.get("KeyCount", 0),
+            "meta_files_found": len(meta_keys),
+            "all_keys_sample": all_keys[:20],
+            "songs_keys_sample": songs_keys[:20],
+            "meta_keys_sample": meta_keys[:10],
+        })
+    except Exception as e:
+        return jsonify({"error": str(e), "type": type(e).__name__}), 500
+
+
+@api.route("/_diag/r2-sync")
+def diag_r2_sync():
+    """Force a sync from R2 to local cache and report what happened."""
+    songs_root = storage / "songs"
+    before = sum(1 for d in songs_root.glob("*/song_meta.json")) if songs_root.exists() else 0
+    try:
+        hydrated = sync_metas_from_r2(songs_root)
+    except Exception as e:
+        return jsonify({"error": str(e), "type": type(e).__name__}), 500
+    after = sum(1 for d in songs_root.glob("*/song_meta.json")) if songs_root.exists() else 0
+    return jsonify({
+        "ok": True,
+        "songs_local_before": before,
+        "songs_local_after": after,
+        "hydrated": hydrated,
+        "storage_root": str(storage),
+    })
+
+
 @api.route("/_diag")
 def diag():
     """Operational status. Safe to expose — no secret values returned."""

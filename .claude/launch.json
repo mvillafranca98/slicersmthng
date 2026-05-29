@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
       "port": 5173
+    },
+    {
+      "name": "imferra-pitch",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["-y", "http-server", "/Users/armandovillafranca/Desktop/mockups/imferra", "-p", "8765", "-c-1", "--silent"],
+      "port": 8765
     }
   ]
 }
