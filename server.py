@@ -4,8 +4,10 @@ Run: python server.py
 API: /api/v1/*
 WebSocket: SocketIO for job progress
 """
+import os
+import secrets
 from pathlib import Path
-from flask import Flask, send_from_directory
+from flask import Flask, request, Response, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
@@ -16,6 +18,43 @@ app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024
 CORS(app, origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000"])
 socketio = SocketIO(app, cors_allowed_origins="*")
 set_socketio(socketio)
+
+
+# ---------------------------------------------------------------------------
+# Site-wide HTTP Basic Auth (band-members-only gate).
+#
+# Activated by setting SITE_PASSWORD on Render (or any env). When set, every
+# request — API, SPA, static assets — must include a valid Basic Auth header
+# whose password matches. The username is ignored (any value is fine), so
+# band members just type "band" or anything they like as user + the shared
+# password. Browsers cache the credentials for the session.
+#
+# Leave SITE_PASSWORD unset to disable the gate (local dev default).
+# ---------------------------------------------------------------------------
+SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "").strip()
+
+
+@app.before_request
+def _enforce_site_password():
+    # Bypasses:
+    # - Auth disabled when env var is unset (local dev convenience)
+    # - SocketIO handshake (it can't carry Basic Auth across the upgrade
+    #   reliably from all browsers; once the page itself is gated, the user
+    #   has already authenticated to load the JS that opens the socket).
+    if not SITE_PASSWORD:
+        return None
+    if request.path.startswith("/socket.io"):
+        return None
+    auth = request.authorization
+    if auth and auth.password and secrets.compare_digest(auth.password, SITE_PASSWORD):
+        return None
+    return Response(
+        "Authentication required.",
+        401,
+        {"WWW-Authenticate": 'Basic realm="SlicerSmthng — band members only"'},
+    )
+
+
 app.register_blueprint(api)
 
 # Serve React build when present
