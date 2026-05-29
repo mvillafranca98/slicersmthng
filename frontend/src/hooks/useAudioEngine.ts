@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
 import { usePlayerStore } from '../stores/playerStore';
+import { useLibraryStore } from '../stores/libraryStore';
 import { audioEngine } from '../lib/audioEngine';
+import type { Song } from '../types';
 
 /**
  * Wires the audio engine singleton to the player store. Mount in exactly
@@ -68,4 +70,58 @@ export function useAudioEngine() {
   useEffect(() => {
     audioEngine.setPitchSemitones(pitchSemitones);
   }, [pitchSemitones]);
+
+  // Wire end-of-song "next song" handler. The engine doesn't know about the
+  // library or setlists, so we provide a callback that resolves whichever
+  // makes sense given current state.
+  useEffect(() => {
+    audioEngine.onRequestNext = (mode) => {
+      const ps = usePlayerStore.getState();
+      const songs = useLibraryStore.getState().songs;
+      let next: Song | null = null;
+      // 1. If a setlist is active, prefer setlist navigation
+      if (ps.activeSetlist && ps.activeSetlist.songs.length > 0) {
+        const setlist = ps.activeSetlist;
+        if (mode === 'shuffle') {
+          const choices = setlist.songs.filter((_, i) => i !== ps.queueIndex);
+          if (choices.length) {
+            const pick = choices[Math.floor(Math.random() * choices.length)];
+            const found = songs.find((s) => s.id === pick.song_id);
+            if (found) {
+              const idx = setlist.songs.findIndex((e) => e.song_id === pick.song_id);
+              ps.setActiveSetlist(setlist, Math.max(0, idx));
+              next = found;
+            }
+          }
+        } else if (mode === 'continue') {
+          if (ps.queueIndex < setlist.songs.length - 1) {
+            const entry = setlist.songs[ps.queueIndex + 1];
+            const found = songs.find((s) => s.id === entry.song_id);
+            if (found) {
+              ps.setActiveSetlist(setlist, ps.queueIndex + 1);
+              next = found;
+            }
+          }
+        }
+      }
+      // 2. Library fallback (when no setlist or setlist navigation found nothing)
+      if (!next && songs.length > 1) {
+        const currentId = ps.currentSong?.id;
+        if (mode === 'shuffle') {
+          const choices = songs.filter((s) => s.id !== currentId);
+          next = choices[Math.floor(Math.random() * choices.length)] || null;
+        } else if (mode === 'continue') {
+          const idx = songs.findIndex((s) => s.id === currentId);
+          next = songs[(idx + 1) % songs.length] || null;
+        }
+      }
+      if (next) {
+        ps.setCurrentSong(next);
+        ps.setPlaying(true);
+      } else {
+        ps.setPlaying(false);
+      }
+    };
+    return () => { audioEngine.onRequestNext = null; };
+  }, []);
 }

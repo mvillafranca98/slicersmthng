@@ -333,6 +333,69 @@ def stream_stem(song_id, stem_name):
             return send_file(p, mimetype="audio/mpeg" if ext == "mp3" else f"audio/{ext}")
     return jsonify({"error": "Stem not found"}), 404
 
+@api.route("/songs/<song_id>/meta", methods=["PUT"])
+def update_song_meta(song_id):
+    """Edit a song's title/artist + cascade re-fetch of derived data.
+
+    On save we:
+      - update title + artist in song_meta.json (locally + R2)
+      - delete the lyrics cache so next /lyrics call queries LRCLib fresh
+      - drop the cover_url + delete local cover.jpg so the new artist's
+        album art is fetched on next request
+      - try to fetch a new cover from iTunes Search (best-effort)
+    """
+    from backend.metadata import fetch_album_art_url
+    from backend.storage import save_song_cover_art
+
+    payload = request.get_json() or {}
+    new_title = (payload.get("title") or "").strip()
+    new_artist = (payload.get("artist") or "").strip()
+    if not new_title:
+        return jsonify({"error": "title is required"}), 400
+
+    song_dir = get_song_dir(storage, song_id)
+    meta_path = song_dir / "song_meta.json"
+    if not meta_path.exists():
+        return jsonify({"error": "Song not found"}), 404
+    with open(meta_path) as f:
+        meta = json.load(f)
+
+    meta["title_original"] = meta.get("title_original") or meta.get("title")
+    meta["artist_original"] = meta.get("artist_original") or meta.get("artist")
+    meta["title"] = new_title
+    meta["artist"] = new_artist or meta.get("artist", "Unknown")
+    meta["metadata_source"] = "user-edit"
+    meta["metadata_confidence"] = 100  # user said so
+
+    # Invalidate lyrics cache + cover so they get refetched with new title/artist
+    try:
+        (song_dir / "lyrics.json").unlink()
+    except OSError:
+        pass
+    try:
+        (song_dir / "cover.jpg").unlink()
+    except OSError:
+        pass
+    meta["cover_url"] = None
+
+    # Best-effort cover refresh
+    try:
+        art_url = fetch_album_art_url(new_title, meta["artist"])
+        if art_url:
+            new_cover = save_song_cover_art(song_id, art_url, song_dir / "cover.jpg")
+            if new_cover:
+                meta["cover_url"] = new_cover
+    except Exception as e:
+        print(f"[update_song_meta] cover refresh failed: {e}")
+
+    save_song_meta(song_id, meta, meta_path)
+
+    # Add thumbnail URL for frontend convenience
+    meta["thumbnail_url"] = f"/api/v1/songs/{song_id}/thumbnail"
+    meta["notes"] = load_notes().get(song_id, "")
+    return jsonify(meta)
+
+
 @api.route("/songs/<song_id>/lyrics")
 def get_song_lyrics(song_id):
     """Fetch (and cache) lyrics for a song from LRCLib (free, open API).

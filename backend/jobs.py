@@ -302,7 +302,9 @@ def _process_audio_to_stems(
             bpm = analysis.get("bpm", 120)
         if not duration_sec:
             duration_sec = analysis.get("duration") or meta_overrides.get("duration_hint", 0)
-    key = "C major"  # real key detection still pending — pulled from chord events later
+    # Key from Modal (Krumhansl-Schmuckler on chroma); falls back to "Unknown"
+    # if Modal didn't compute it (e.g., older slices before the key step shipped).
+    key = sep.get("key") or "Unknown"
     # Chord events from Modal (autochord). Empty if Modal isn't redeployed
     # with the new image yet, or autochord couldn't recognize the audio.
     chords: list = list(sep.get("chords") or [])

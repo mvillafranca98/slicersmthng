@@ -90,12 +90,17 @@ export function LyricsPanel() {
   }, [syncedLines, currentTime]);
 
   // Auto-scroll active line so it stays centered as it advances.
+  // We compute scrollTop manually rather than using scrollIntoView, which
+  // can scroll outer page/document containers in addition to the lyrics box.
   useEffect(() => {
     const el = activeRef.current;
-    if (!el) return;
-    // scrollIntoView with block:'center' is the most reliable cross-browser way
-    // to keep an element vertically centered in its scrolling ancestor.
-    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    const container = containerRef.current;
+    if (!el || !container) return;
+    const containerRect = container.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const offsetWithinContainer = elRect.top - containerRect.top + container.scrollTop;
+    const targetScroll = offsetWithinContainer - container.clientHeight / 2 + el.clientHeight / 2;
+    container.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' });
   }, [activeIdx]);
 
   if (!currentSong) return null;

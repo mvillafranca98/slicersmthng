@@ -49,6 +49,10 @@ class AudioEngine {
   private clickBufferAccent: AudioBuffer | null = null;
   private clickBufferRegular: AudioBuffer | null = null;
 
+  /** Optional callback invoked at end-of-song when playMode is continue or shuffle.
+   *  Set by useAudioEngine hook which knows about the library + setlists. */
+  onRequestNext: ((mode: 'continue' | 'shuffle') => void) | null = null;
+
   private get ctx(): AudioContext {
     return Tone.getContext().rawContext as AudioContext;
   }
@@ -315,13 +319,24 @@ class AudioEngine {
     if (!state.metronomeEnabled || !this.playing || !this.ctx) return;
     this.ensureMetronomeGain();
 
-    if (this.metronomeNextClickTime < this.ctx.currentTime - 0.05) {
+    // BPM override (user-corrected) wins over detected BPM; beat offset shifts
+    // the whole grid in song time (e.g., to align with the actual downbeat
+    // when the song has an intro before beat 1).
+    const songBpm = Math.max(
+      30,
+      Math.min(300, state.bpmOverride ?? state.currentSong?.bpm ?? 120),
+    );
+    const beatOffset = state.beatOffsetSec || 0;
+
+    if (this.metronomeNextClickTime < this.ctx.currentTime - 0.05
+        || Math.abs(this.metronomeBpm - songBpm) > 0.1) {
       const songPos = this.currentPosition();
-      const songBpm = Math.max(40, Math.min(240, state.currentSong?.bpm || 120));
       this.metronomeBpm = songBpm;
       const secondsPerBeatInSong = 60 / songBpm;
-      this.metronomeBeatIndex = Math.ceil(songPos / secondsPerBeatInSong);
-      const beatPosInSong = this.metronomeBeatIndex * secondsPerBeatInSong;
+      // Snap to the next whole beat in song time, accounting for offset.
+      const beatsFromOffset = Math.max(0, (songPos - beatOffset) / secondsPerBeatInSong);
+      this.metronomeBeatIndex = Math.ceil(beatsFromOffset);
+      const beatPosInSong = this.metronomeBeatIndex * secondsPerBeatInSong + beatOffset;
       this.metronomeNextClickTime = this.ctx.currentTime + (beatPosInSong - songPos) / this.tempo;
     }
 
@@ -366,9 +381,20 @@ class AudioEngine {
       }
 
       if (pos >= this.maxDuration() - 0.01) {
+        // End-of-song behaviour depends on playMode.
+        const mode = state.playMode;
         this.pause();
         this.seek(0);
-        state.setPlaying(false);
+        if (mode === 'repeat') {
+          // Loop the current song
+          state.setPlaying(true);
+          this.play();
+        } else if ((mode === 'continue' || mode === 'shuffle') && this.onRequestNext) {
+          // Defer to the hook which knows about the setlist/library
+          this.onRequestNext(mode);
+        } else {
+          state.setPlaying(false);
+        }
         this.rafId = null;
         return;
       }

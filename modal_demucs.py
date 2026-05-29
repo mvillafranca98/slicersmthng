@@ -136,6 +136,9 @@ def separate(req: dict) -> dict:
     except Exception:
         pass  # analysis is best-effort; defaults are fine
 
+    # --- Key detection (Krumhansl-Schmuckler on chroma) ---
+    detected_key = _detect_key_via_librosa(in_path)
+
     # --- Chord detection (librosa-based, best-effort) ---
     # Returns a list of {time: float seconds, chord: str like 'C', 'Am'}.
     # We sidestep autochord/madmom/vamp dependency hell by doing template
@@ -194,6 +197,7 @@ def separate(req: dict) -> dict:
             "bpm": bpm,
             "duration": duration_sec,
             "chords": chord_events,
+            "key": detected_key,
             "model": model,
             "format": audio_format,
             "song_id": song_id,
@@ -209,10 +213,55 @@ def separate(req: dict) -> dict:
         "bpm": bpm,
         "duration": duration_sec,
         "chords": chord_events,
+        "key": detected_key,
         "model": model,
         "format": audio_format,
         "song_id": song_id,
     }
+
+
+def _detect_key_via_librosa(audio_path) -> str:
+    """Estimate musical key via Krumhansl-Schmuckler template matching on the
+    summed chroma profile of the whole song.
+
+    Returns strings like "C major", "A minor", or "Unknown" on failure.
+    """
+    try:
+        import librosa
+        import numpy as np
+    except Exception:
+        return "Unknown"
+
+    try:
+        y, sr = librosa.load(str(audio_path), sr=22050, mono=True)
+        chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
+        # Sum across time to get a single 12-bin profile of overall tonality.
+        prof = chroma.sum(axis=1)
+        norm = np.linalg.norm(prof)
+        if norm < 1e-6:
+            return "Unknown"
+        prof = prof / norm
+    except Exception as e:
+        print(f"[key-detection] chroma failed: {e}")
+        return "Unknown"
+
+    # Krumhansl-Kessler key profiles (1990) — major/minor weights for C/c.
+    # We rotate these 12 ways and pick the highest-correlation template.
+    major = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
+    minor = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
+    notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+
+    best_score = -float('inf')
+    best_key = "Unknown"
+    for r in range(12):
+        for tmpl, kind in ((major, "major"), (minor, "minor")):
+            rotated = np.roll(tmpl, r)
+            rotated = rotated / np.linalg.norm(rotated)
+            score = float(np.dot(prof, rotated))
+            if score > best_score:
+                best_score = score
+                best_key = f"{notes[r]} {kind}"
+    return best_key
 
 
 # ---------------------------------------------------------------------------

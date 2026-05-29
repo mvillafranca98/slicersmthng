@@ -28,6 +28,9 @@ interface PlayerState {
   metronomeEnabled: boolean;
   metronomeVolume: number;        // 0-1, persisted to localStorage
   metronomeCountIn: boolean;      // when true, 4 beats of click before stems start
+  bpmOverride: number | null;     // when set, replaces detected BPM (per-session)
+  beatOffsetSec: number;          // phase offset for downbeat alignment (-2 to +2 seconds)
+  playMode: 'stop' | 'continue' | 'repeat' | 'shuffle'; // end-of-song behaviour
   expanded: boolean;
   activeSetlist: Setlist | null;
   queueIndex: number;
@@ -45,6 +48,9 @@ interface PlayerState {
   setMetronomeEnabled: (v: boolean) => void;
   setMetronomeVolume: (v: number) => void;
   setMetronomeCountIn: (v: boolean) => void;
+  setBpmOverride: (v: number | null) => void;
+  setBeatOffsetSec: (v: number) => void;
+  setPlayMode: (m: 'stop' | 'continue' | 'repeat' | 'shuffle') => void;
   setExpanded: (v: boolean) => void;
   setActiveSetlist: (s: Setlist | null, index?: number) => void;
   nextInSetlist: () => Song | null;
@@ -74,6 +80,13 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   metronomeCountIn: (() => {
     if (typeof window === 'undefined') return false;
     return localStorage.getItem('slcr.metronomeCountIn') === '1';
+  })(),
+  bpmOverride: null,
+  beatOffsetSec: 0,
+  playMode: (() => {
+    if (typeof window === 'undefined') return 'continue' as const;
+    const v = localStorage.getItem('slcr.playMode');
+    return (v === 'stop' || v === 'continue' || v === 'repeat' || v === 'shuffle') ? v as 'stop'|'continue'|'repeat'|'shuffle' : 'continue';
   })(),
   expanded: false,
   activeSetlist: null,
@@ -111,6 +124,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   setMetronomeCountIn: (v) => {
     if (typeof window !== 'undefined') localStorage.setItem('slcr.metronomeCountIn', v ? '1' : '0');
     set({ metronomeCountIn: v });
+  },
+  setBpmOverride: (v) => set({ bpmOverride: v == null ? null : Math.max(30, Math.min(300, v)) }),
+  setBeatOffsetSec: (v) => set({ beatOffsetSec: Math.max(-2, Math.min(2, v)) }),
+  setPlayMode: (m) => {
+    if (typeof window !== 'undefined') localStorage.setItem('slcr.playMode', m);
+    set({ playMode: m });
   },
   setExpanded: (v) => set({ expanded: v }),
   setActiveSetlist(s, index = 0) {

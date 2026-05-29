@@ -1,19 +1,26 @@
 import { useCallback, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
+import { toast } from 'sonner';
 import {
   ChevronDown,
+  Check,
   Music2,
   Pause,
+  Pencil,
   Play,
   Repeat,
+  Repeat1,
   Rewind,
   FastForward,
+  Shuffle,
   SkipBack,
   SkipForward,
+  Square,
   Volume2,
   VolumeX,
   Magnet,
   Timer,
+  X,
 } from 'lucide-react';
 import { usePlayerStore } from '../stores/playerStore';
 import { useLibraryStore } from '../stores/libraryStore';
@@ -71,10 +78,20 @@ export function PlayerExpanded() {
     queueIndex,
     setActiveSetlist,
     setCurrentSong,
+    bpmOverride,
+    setBpmOverride,
+    beatOffsetSec,
+    setBeatOffsetSec,
+    playMode,
+    setPlayMode,
   } = usePlayerStore();
   const librarySongs = useLibraryStore((s) => s.songs);
+  const fetchSongs = useLibraryStore((s) => s.fetchSongs);
   const [snapToBeat, setSnapToBeat] = useState(true);
   const [imgError, setImgError] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editArtist, setEditArtist] = useState('');
 
   if (!currentSong) return null;
 
@@ -98,31 +115,75 @@ export function PlayerExpanded() {
   const seek = (t: number) => audioEngine.seek(t);
 
   // ---- Prev / Next navigation ----
-  // Prev: if we're >3s in, rewind to start. Else, go to previous setlist song.
-  // Next: go to next setlist song. No-op if no setlist active or at end.
+  // Prev: >3s in = rewind to start. Else setlist prev, then library prev, then rewind.
+  // Next: setlist next, then library next. Wraps library at end.
   const goToPrev = () => {
     if (currentTime > 3) { seek(0); return; }
-    if (!activeSetlist || queueIndex <= 0) { seek(0); return; }
-    const prevEntry = activeSetlist.songs[queueIndex - 1];
-    const song = librarySongs.find((s) => s.id === prevEntry?.song_id);
-    if (song) {
-      setActiveSetlist(activeSetlist, queueIndex - 1);
-      setCurrentSong(song);
-    } else {
-      seek(0);
+    if (activeSetlist && queueIndex > 0) {
+      const prevEntry = activeSetlist.songs[queueIndex - 1];
+      const song = librarySongs.find((s) => s.id === prevEntry?.song_id);
+      if (song) { setActiveSetlist(activeSetlist, queueIndex - 1); setCurrentSong(song); return; }
     }
+    if (librarySongs.length > 1) {
+      const idx = librarySongs.findIndex((s) => s.id === currentSong.id);
+      if (idx > 0) { setCurrentSong(librarySongs[idx - 1]); return; }
+    }
+    seek(0);
   };
   const goToNext = () => {
-    if (!activeSetlist || queueIndex >= (activeSetlist.songs.length - 1)) return;
-    const nextEntry = activeSetlist.songs[queueIndex + 1];
-    const song = librarySongs.find((s) => s.id === nextEntry?.song_id);
-    if (song) {
-      setActiveSetlist(activeSetlist, queueIndex + 1);
-      setCurrentSong(song);
+    if (activeSetlist && queueIndex < activeSetlist.songs.length - 1) {
+      const nextEntry = activeSetlist.songs[queueIndex + 1];
+      const song = librarySongs.find((s) => s.id === nextEntry?.song_id);
+      if (song) { setActiveSetlist(activeSetlist, queueIndex + 1); setCurrentSong(song); return; }
+    }
+    if (librarySongs.length > 1) {
+      const idx = librarySongs.findIndex((s) => s.id === currentSong.id);
+      const next = librarySongs[(idx + 1) % librarySongs.length];
+      if (next) setCurrentSong(next);
     }
   };
-  const hasPrev = currentTime > 3 || (activeSetlist != null && queueIndex > 0);
-  const hasNext = activeSetlist != null && queueIndex < (activeSetlist.songs.length - 1);
+  const hasPrev = currentTime > 3 || (activeSetlist != null && queueIndex > 0)
+    || (librarySongs.length > 1 && librarySongs.findIndex((s) => s.id === currentSong.id) > 0);
+  const hasNext = (activeSetlist != null && queueIndex < (activeSetlist.songs.length - 1))
+    || (librarySongs.length > 1);
+
+  // ---- Play mode cycle ----
+  const PLAY_MODE_ORDER: Array<typeof playMode> = ['continue', 'repeat', 'shuffle', 'stop'];
+  const PLAY_MODE_META: Record<typeof playMode, { icon: typeof Repeat; label: string; title: string }> = {
+    continue: { icon: Repeat, label: 'Continue', title: 'When the song ends, play the next one' },
+    repeat: { icon: Repeat1, label: 'Repeat', title: 'When the song ends, play it again' },
+    shuffle: { icon: Shuffle, label: 'Shuffle', title: 'When the song ends, pick a random next song' },
+    stop: { icon: Square, label: 'Stop', title: 'When the song ends, stop playback' },
+  };
+  const PlayModeIcon = PLAY_MODE_META[playMode].icon;
+  const cyclePlayMode = () => {
+    const idx = PLAY_MODE_ORDER.indexOf(playMode);
+    setPlayMode(PLAY_MODE_ORDER[(idx + 1) % PLAY_MODE_ORDER.length]);
+  };
+
+  // ---- Title / artist edit ----
+  const beginEdit = () => {
+    setEditTitle(currentSong.title || '');
+    setEditArtist(currentSong.artist || '');
+    setEditing(true);
+  };
+  const cancelEdit = () => setEditing(false);
+  const saveEdit = async () => {
+    const newTitle = editTitle.trim();
+    if (!newTitle) return;
+    try {
+      const updated = await api.updateSongMeta(currentSong.id, newTitle, editArtist.trim());
+      setCurrentSong({ ...currentSong, title: updated.title, artist: updated.artist, cover_url: updated.cover_url });
+      fetchSongs();
+      toast.success(`Updated to ${updated.artist} — ${updated.title}`, {
+        description: 'Lyrics + cover art will refresh when you click them.',
+      });
+      setImgError(false);  // give cover a chance to reload
+    } catch (e) {
+      toast.error('Failed to update metadata', { description: (e as Error).message });
+    }
+    setEditing(false);
+  };
 
   // ---- Loop in bars ----
   const setLoopLengthBars = (bars: number) => {
@@ -138,7 +199,7 @@ export function PlayerExpanded() {
       exit={{ y: '100%' }}
       transition={{ type: 'spring', stiffness: 360, damping: 40 }}
       className="fixed bottom-0 inset-x-0 z-[150] glass border-t border-white/10 flex flex-col"
-      style={{ height: '78vh' }}
+      style={{ height: '100vh' }}
     >
       {/* ----- Header: song info + transport + collapse ----- */}
       <div className="shrink-0 px-5 py-4 border-b border-white/5 flex items-center gap-4">
@@ -155,21 +216,76 @@ export function PlayerExpanded() {
           </div>
         )}
         <div className="min-w-0 flex-1">
-          <h2 className="text-base font-semibold text-text-primary truncate">{currentSong.title}</h2>
-          <p className="text-sm text-text-secondary truncate">{currentSong.artist}</p>
-          <div className="flex gap-1.5 mt-1">
-            <span className="text-[10px] font-mono text-text-primary bg-white/[0.04] border border-white/5 rounded px-1.5 py-px">
-              ♩ {Math.round(bpm)}
-            </span>
-            <span className="text-[10px] font-mono text-text-primary bg-white/[0.04] border border-white/5 rounded px-1.5 py-px">
-              {currentSong.key}
-            </span>
-            {tempoPercent !== 100 && (
-              <span className="text-[10px] font-mono text-primary bg-primary/15 border border-primary/30 rounded px-1.5 py-px">
-                {tempoPercent}%
+          {!editing ? (
+            <>
+              <div className="flex items-center gap-2 min-w-0">
+                <h2 className="text-base font-semibold text-text-primary truncate">{currentSong.title}</h2>
+                <button
+                  type="button"
+                  onClick={beginEdit}
+                  aria-label="Edit title + artist"
+                  title="Edit title + artist (re-fetches lyrics + cover art)"
+                  className="h-6 w-6 grid place-items-center rounded text-text-muted hover:text-text-primary hover:bg-white/[0.04] shrink-0"
+                >
+                  <Pencil className="w-3 h-3" />
+                </button>
+              </div>
+              <p className="text-sm text-text-secondary truncate">{currentSong.artist}</p>
+            </>
+          ) : (
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') cancelEdit(); }}
+                  placeholder="Title"
+                  autoFocus
+                  className="flex-1 min-w-0 rounded bg-bg-card border border-primary/40 px-2 py-1 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <button
+                  type="button"
+                  onClick={saveEdit}
+                  aria-label="Save"
+                  className="h-7 w-7 grid place-items-center rounded bg-primary text-bg-deepest"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelEdit}
+                  aria-label="Cancel"
+                  className="h-7 w-7 grid place-items-center rounded bg-white/[0.04] text-text-secondary hover:text-text-primary"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <input
+                type="text"
+                value={editArtist}
+                onChange={(e) => setEditArtist(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') cancelEdit(); }}
+                placeholder="Artist"
+                className="rounded bg-bg-card border border-white/10 px-2 py-1 text-xs text-text-secondary focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+            </div>
+          )}
+          {!editing && (
+            <div className="flex gap-1.5 mt-1">
+              <span className="text-[10px] font-mono text-text-primary bg-white/[0.04] border border-white/5 rounded px-1.5 py-px">
+                ♩ {Math.round(bpmOverride ?? bpm)}{bpmOverride != null && <span className="text-primary"> ✎</span>}
               </span>
-            )}
-          </div>
+              <span className="text-[10px] font-mono text-text-primary bg-white/[0.04] border border-white/5 rounded px-1.5 py-px">
+                {currentSong.key || 'Unknown'}
+              </span>
+              {tempoPercent !== 100 && (
+                <span className="text-[10px] font-mono text-primary bg-primary/15 border border-primary/30 rounded px-1.5 py-px">
+                  {tempoPercent}%
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Transport */}
@@ -198,11 +314,23 @@ export function PlayerExpanded() {
           </TransportButton>
           <TransportButton
             aria-label="Next song"
-            title="Next in setlist"
+            title="Next song"
             disabled={!hasNext}
             onClick={goToNext}
           >
             <SkipForward className="w-4 h-4" />
+          </TransportButton>
+          <TransportButton
+            aria-label={`Play mode: ${PLAY_MODE_META[playMode].label}`}
+            title={PLAY_MODE_META[playMode].title}
+            onClick={cyclePlayMode}
+            className={cn(
+              playMode === 'stop'
+                ? 'text-text-muted'
+                : 'text-primary hover:text-primary',
+            )}
+          >
+            <PlayModeIcon className="w-4 h-4" />
           </TransportButton>
         </div>
 
@@ -337,6 +465,59 @@ export function PlayerExpanded() {
               ))}
             </div>
             <p className="mt-2 text-[11px] text-text-muted">Pitch-neutral — slowing down keeps the original key.</p>
+
+            {/* BPM override + beat phase offset */}
+            <div className="mt-4 rounded-xl bg-bg-card/60 border border-white/5 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted">BPM</div>
+                <button
+                  type="button"
+                  onClick={() => { setBpmOverride(null); setBeatOffsetSec(0); }}
+                  disabled={bpmOverride == null && beatOffsetSec === 0}
+                  className="text-[10px] text-text-muted hover:text-text-primary disabled:opacity-30"
+                >
+                  reset
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={30}
+                  max={300}
+                  step={1}
+                  value={bpmOverride ?? Math.round(bpm)}
+                  onChange={(e) => setBpmOverride(Number(e.target.value))}
+                  aria-label="BPM override"
+                  className="w-16 rounded bg-bg-card border border-white/10 px-2 py-1 text-xs font-mono text-text-primary text-center focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <button
+                  type="button"
+                  onClick={() => bpmOverride && setBpmOverride(bpmOverride * 2)}
+                  title="Double — fix half-time detection"
+                  className="h-7 px-2 rounded text-[10px] font-mono bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary"
+                >×2</button>
+                <button
+                  type="button"
+                  onClick={() => bpmOverride && setBpmOverride(bpmOverride / 2)}
+                  title="Halve — fix double-time detection"
+                  className="h-7 px-2 rounded text-[10px] font-mono bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary"
+                >÷2</button>
+                <div className="flex-1 ml-2">
+                  <label className="block text-[9px] text-text-muted mb-0.5">Phase {beatOffsetSec.toFixed(2)}s</label>
+                  <input
+                    type="range"
+                    min={-2}
+                    max={2}
+                    step={0.01}
+                    value={beatOffsetSec}
+                    onChange={(e) => setBeatOffsetSec(Number(e.target.value))}
+                    aria-label="Beat phase offset"
+                    className="w-full"
+                  />
+                </div>
+              </div>
+              <p className="mt-1 text-[10px] text-text-muted">If the metronome is off-tempo, try ×2 / ÷2 first, then drag the Phase slider until the clicks land on the beat.</p>
+            </div>
 
             {/* Pitch shift (independent of tempo) */}
             <div className="mt-4">
