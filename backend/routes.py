@@ -1,13 +1,19 @@
 """Flask API routes for SlicerSmthng (PRD §9.2)."""
 import json
 import os
+import secrets as _secrets
 import threading
 import uuid
 from pathlib import Path
-from flask import Blueprint, request, jsonify, send_file
+from flask import Blueprint, abort, request, jsonify, send_file
 
 from backend.config import get_storage
-from backend.utils import get_song_dir, sanitize_filename
+from backend.utils import (
+    get_song_dir,
+    sanitize_filename,
+    validate_song_id,
+    validate_stem_name,
+)
 from backend.jobs import run_import, run_import_file
 from backend.storage import sync_metas_from_r2, save_song_meta, save_song_lyrics, delete_song_from_r2, r2_status
 from backend.metadata import enrich_metadata
@@ -24,6 +30,34 @@ from backend.data import (
 
 api = Blueprint("api", __name__, url_prefix="/api/v1")
 storage = get_storage()
+
+
+# ---------------------------------------------------------------------------
+# Defense-in-depth: validate every <song_id> / <stem_name> URL parameter
+# BEFORE the view runs. Catches path-traversal attempts (`..`, encoded
+# slashes, etc.) even in routes that don't go through get_song_dir.
+# ---------------------------------------------------------------------------
+@api.before_request
+def _validate_url_path_args():
+    args = request.view_args or {}
+    if "song_id" in args:
+        validate_song_id(args["song_id"])
+    if "stem_name" in args:
+        validate_stem_name(args["stem_name"])
+
+
+# ---------------------------------------------------------------------------
+# Internal admin-token gate for the noisy diag endpoints (they leak R2
+# object listings + raw boto3 exception strings, both useful for debugging
+# but unwanted in front of band members who got past the site password).
+# ---------------------------------------------------------------------------
+def _require_admin_token():
+    expected = os.environ.get("ADMIN_TOKEN", "").strip()
+    if not expected:
+        return  # token unset = endpoint open (local dev convenience)
+    supplied = request.headers.get("X-Admin-Token", "").strip()
+    if not supplied or not _secrets.compare_digest(supplied, expected):
+        abort(403, description="admin token required")
 
 # Pull any persisted song metadata down from R2 at startup. This rebuilds
 # the local song_meta.json cache after a container restart so the library
@@ -82,6 +116,7 @@ def _list_songs():
 def diag_r2_list():
     """List up to 50 objects in the R2 bucket. Surfaces auth/permission problems
     that the silent-fallback sync swallows."""
+    _require_admin_token()
     import os
     bucket = os.environ.get("R2_BUCKET", "").strip()
     account_id = os.environ.get("R2_ACCOUNT_ID", "").strip()
@@ -125,6 +160,7 @@ def diag_r2_list():
 @api.route("/_diag/r2-sync")
 def diag_r2_sync():
     """Force a sync from R2 to local cache and report what happened."""
+    _require_admin_token()
     songs_root = storage / "songs"
     before = sum(1 for d in songs_root.glob("*/song_meta.json")) if songs_root.exists() else 0
     try:
