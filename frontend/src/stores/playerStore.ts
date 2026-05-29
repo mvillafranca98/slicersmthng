@@ -73,20 +73,26 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   stems: {},
   metronomeEnabled: false,
   metronomeVolume: (() => {
-    if (typeof window === 'undefined') return 0.6;
-    const v = parseFloat(localStorage.getItem('slcr.metronomeVolume') || '');
-    return isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.6;
+    try {
+      if (typeof window === 'undefined') return 0.6;
+      const v = parseFloat(localStorage.getItem('slcr.metronomeVolume') || '');
+      return isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.6;
+    } catch { return 0.6; }
   })(),
   metronomeCountIn: (() => {
-    if (typeof window === 'undefined') return false;
-    return localStorage.getItem('slcr.metronomeCountIn') === '1';
+    try {
+      if (typeof window === 'undefined') return false;
+      return localStorage.getItem('slcr.metronomeCountIn') === '1';
+    } catch { return false; }
   })(),
   bpmOverride: null,
   beatOffsetSec: 0,
   playMode: (() => {
-    if (typeof window === 'undefined') return 'continue' as const;
-    const v = localStorage.getItem('slcr.playMode');
-    return (v === 'stop' || v === 'continue' || v === 'repeat' || v === 'shuffle') ? v as 'stop'|'continue'|'repeat'|'shuffle' : 'continue';
+    try {
+      if (typeof window === 'undefined') return 'continue' as const;
+      const v = localStorage.getItem('slcr.playMode');
+      return (v === 'stop' || v === 'continue' || v === 'repeat' || v === 'shuffle') ? v as 'stop'|'continue'|'repeat'|'shuffle' : 'continue';
+    } catch { return 'continue' as const; }
   })(),
   expanded: false,
   activeSetlist: null,

@@ -155,7 +155,10 @@ export function PlayerExpanded() {
     shuffle: { icon: Shuffle, label: 'Shuffle', title: 'When the song ends, pick a random next song' },
     stop: { icon: Square, label: 'Stop', title: 'When the song ends, stop playback' },
   };
-  const PlayModeIcon = PLAY_MODE_META[playMode].icon;
+  // Fall back to 'continue' if playMode somehow doesn't match — prevents render crash
+  // from a stale or corrupted localStorage value.
+  const playModeMeta = PLAY_MODE_META[playMode] || PLAY_MODE_META.continue;
+  const PlayModeIcon = playModeMeta.icon;
   const cyclePlayMode = () => {
     const idx = PLAY_MODE_ORDER.indexOf(playMode);
     setPlayMode(PLAY_MODE_ORDER[(idx + 1) % PLAY_MODE_ORDER.length]);
@@ -321,8 +324,8 @@ export function PlayerExpanded() {
             <SkipForward className="w-4 h-4" />
           </TransportButton>
           <TransportButton
-            aria-label={`Play mode: ${PLAY_MODE_META[playMode].label}`}
-            title={PLAY_MODE_META[playMode].title}
+            aria-label={`Play mode: ${playModeMeta.label}`}
+            title={playModeMeta.title}
             onClick={cyclePlayMode}
             className={cn(
               playMode === 'stop'

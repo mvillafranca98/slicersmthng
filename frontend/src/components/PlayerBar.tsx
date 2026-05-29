@@ -32,6 +32,17 @@ export function PlayerBar() {
   } = usePlayerStore();
   const librarySongs = useLibraryStore((s) => s.songs);
   const [imgError, setImgError] = useState(false);
+  useAudioEngine();
+
+  if (!currentSong) {
+    return (
+      <div className="fixed bottom-0 inset-x-0 h-20 glass border-t border-white/5 flex items-center justify-center text-text-muted text-sm z-[100]">
+        No song loaded. Paste a YouTube link above to add your first song.
+      </div>
+    );
+  }
+
+  // currentSong is non-null past this point — safe to dereference.
   const seek = (t: number) => audioEngine.seek(t);
 
   const goToPrev = () => {
@@ -42,7 +53,7 @@ export function PlayerBar() {
       if (song) { setActiveSetlist(activeSetlist, queueIndex - 1); setCurrentSong(song); return; }
     }
     if (librarySongs.length > 1) {
-      const idx = librarySongs.findIndex((s) => s.id === currentSong!.id);
+      const idx = librarySongs.findIndex((s) => s.id === currentSong.id);
       if (idx > 0) { setCurrentSong(librarySongs[idx - 1]); return; }
     }
     seek(0);
@@ -54,24 +65,15 @@ export function PlayerBar() {
       if (song) { setActiveSetlist(activeSetlist, queueIndex + 1); setCurrentSong(song); return; }
     }
     if (librarySongs.length > 1) {
-      const idx = librarySongs.findIndex((s) => s.id === currentSong!.id);
+      const idx = librarySongs.findIndex((s) => s.id === currentSong.id);
       const next = librarySongs[(idx + 1) % librarySongs.length];
       if (next) setCurrentSong(next);
     }
   };
   const hasPrev = currentTime > 3 || (activeSetlist != null && queueIndex > 0)
-    || (librarySongs.length > 1 && librarySongs.findIndex((s) => s.id === currentSong!.id) > 0);
+    || (librarySongs.length > 1 && librarySongs.findIndex((s) => s.id === currentSong.id) > 0);
   const hasNext = (activeSetlist != null && queueIndex < (activeSetlist.songs.length - 1))
     || (librarySongs.length > 1);
-  useAudioEngine();
-
-  if (!currentSong) {
-    return (
-      <div className="fixed bottom-0 inset-x-0 h-20 glass border-t border-white/5 flex items-center justify-center text-text-muted text-sm z-[100]">
-        No song loaded. Paste a YouTube link above to add your first song.
-      </div>
-    );
-  }
 
   const thumb = currentSong.thumbnail_url || api.thumbnailUrl(currentSong.id);
   const progressPct = duration > 0 ? (currentTime / duration) * 100 : 0;
