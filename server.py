@@ -48,10 +48,13 @@ def _enforce_site_password():
     auth = request.authorization
     if auth and auth.password and secrets.compare_digest(auth.password, SITE_PASSWORD):
         return None
+    # ASCII-only realm — HTTP headers can't carry non-Latin-1 chars,
+    # and Werkzeug raises when it tries to encode them, which the eventlet
+    # WSGI worker surfaces to Render as a 502.
     return Response(
         "Authentication required.",
         401,
-        {"WWW-Authenticate": 'Basic realm="SlicerSmthng — band members only"'},
+        {"WWW-Authenticate": 'Basic realm="SlicerSmthng - band members only"'},
     )
 
 
