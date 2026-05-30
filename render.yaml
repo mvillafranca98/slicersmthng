@@ -11,7 +11,7 @@ services:
     plan: free               # 750 hr/mo, 0.5 CPU, 512 MB; sleeps after 15 min idle
     region: oregon           # change if you prefer; ~$0 difference
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /api/v1/songs
+    healthCheckPath: /api/v1/_health
     envVars:
       - key: REPLICATE_API_TOKEN
         sync: false          # do NOT commit; set manually in Render dashboard

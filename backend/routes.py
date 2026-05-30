@@ -62,12 +62,23 @@ def _require_admin_token():
 # Pull any persisted song metadata down from R2 at startup. This rebuilds
 # the local song_meta.json cache after a container restart so the library
 # isn't empty when the ephemeral disk has been wiped.
-try:
-    hydrated = sync_metas_from_r2(storage / "songs")
-    if hydrated:
-        print(f"[storage] hydrated {hydrated} song meta(s) from R2 at startup")
-except Exception as e:
-    print(f"[storage] startup R2 sync failed (non-fatal): {e}")
+#
+# IMPORTANT: runs in a daemon background thread so we don't block port-bind.
+# Render's port scanner times out the deploy if the app hasn't started
+# listening within a few minutes, and the R2 round-trip from a cold
+# free-tier container occasionally lost that race. Now Flask starts
+# immediately and the library populates a beat later.
+def _hydrate_from_r2_async():
+    try:
+        hydrated = sync_metas_from_r2(storage / "songs")
+        if hydrated:
+            print(f"[storage] hydrated {hydrated} song meta(s) from R2 at startup", flush=True)
+    except Exception as e:
+        print(f"[storage] startup R2 sync failed (non-fatal): {e}", flush=True)
+
+
+threading.Thread(target=_hydrate_from_r2_async, daemon=True, name="r2-hydrate").start()
+
 jobs = {}  # job_id -> { status, stage, percent, message, result, error }
 jobs_lock = threading.Lock()
 socketio = None
@@ -108,6 +119,16 @@ def _list_songs():
         meta["thumbnail_url"] = f"/api/v1/songs/{meta['id']}/thumbnail"
         out.append(meta)
     return sorted(out, key=lambda s: s.get("added_at", ""), reverse=True)
+
+
+# ----- Health check (Render hits this on every deploy + uptime probe) -----
+
+@api.route("/_health")
+def health():
+    """Public health check for Render. Returns 200 immediately with no body
+    so it works even before the R2 hydration thread has finished, and so it
+    bypasses the SITE_PASSWORD gate (no song data is leaked)."""
+    return "", 200
 
 
 # ----- Diag (used to debug deploy issues without screen-scraping logs) -----

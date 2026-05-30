@@ -33,17 +33,17 @@ set_socketio(socketio)
 # ---------------------------------------------------------------------------
 SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "").strip()
 
+# Paths that bypass the password gate entirely. Keep this list tight:
+# - /api/v1/_health: Render's health-check probe; returns 200 with no body
+# - /socket.io: WS upgrade handshake (can't reliably carry Basic Auth)
+GATE_EXEMPT_PREFIXES = ("/api/v1/_health", "/socket.io")
+
 
 @app.before_request
 def _enforce_site_password():
-    # Bypasses:
-    # - Auth disabled when env var is unset (local dev convenience)
-    # - SocketIO handshake (it can't carry Basic Auth across the upgrade
-    #   reliably from all browsers; once the page itself is gated, the user
-    #   has already authenticated to load the JS that opens the socket).
     if not SITE_PASSWORD:
-        return None
-    if request.path.startswith("/socket.io"):
+        return None  # gate disabled (local dev convenience)
+    if any(request.path.startswith(p) for p in GATE_EXEMPT_PREFIXES):
         return None
     auth = request.authorization
     if auth and auth.password and secrets.compare_digest(auth.password, SITE_PASSWORD):
