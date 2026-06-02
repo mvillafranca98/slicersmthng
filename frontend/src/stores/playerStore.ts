@@ -7,12 +7,6 @@ const defaultStemState = (): StemState => ({
   solo: false,
 });
 
-function defaultStems(names: string[]): Record<string, StemState> {
-  const o: Record<string, StemState> = {};
-  names.forEach(n => { o[n] = defaultStemState(); });
-  return o;
-}
-
 interface PlayerState {
   currentSong: Song | null;
   isPlaying: boolean;
