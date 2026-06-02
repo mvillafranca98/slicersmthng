@@ -45,6 +45,7 @@ class AudioEngine {
   private metronomeNextClickTime = 0;
   private metronomeBeatIndex = 0;
   private metronomeBpm = 120;
+  private metronomeBeatOffset = 0;
   private metronomeVolume = 0.6;
   private clickBufferAccent: AudioBuffer | null = null;
   private clickBufferRegular: AudioBuffer | null = null;
@@ -328,10 +329,18 @@ class AudioEngine {
     );
     const beatOffset = state.beatOffsetSec || 0;
 
+    // Re-snap the click grid when ANY of these changes:
+    //   - we're behind on the schedule (normal mid-cycle case)
+    //   - BPM changed by more than 0.1 (user override / song change)
+    //   - beat-offset (phase) changed by more than ~10ms (user clicked
+    //     "Mark 1" or moved the Phase slider — without this check the
+    //     grid would stay on its old phase until the next BPM change).
     if (this.metronomeNextClickTime < this.ctx.currentTime - 0.05
-        || Math.abs(this.metronomeBpm - songBpm) > 0.1) {
+        || Math.abs(this.metronomeBpm - songBpm) > 0.1
+        || Math.abs(this.metronomeBeatOffset - beatOffset) > 0.01) {
       const songPos = this.currentPosition();
       this.metronomeBpm = songBpm;
+      this.metronomeBeatOffset = beatOffset;
       const secondsPerBeatInSong = 60 / songBpm;
       // Snap to the next whole beat in song time, accounting for offset.
       const beatsFromOffset = Math.max(0, (songPos - beatOffset) / secondsPerBeatInSong);

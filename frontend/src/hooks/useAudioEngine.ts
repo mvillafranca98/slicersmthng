@@ -4,27 +4,35 @@ import { useLibraryStore } from '../stores/libraryStore';
 import { audioEngine } from '../lib/audioEngine';
 import type { Song } from '../types';
 
-// Track URLs we've already prefetched in this session so we don't kick off
-// the same Range-fetch dozens of times when songs shuffle around.
+// Track URLs we've already prefetched in this session so we don't pull
+// the same multi-MB blob over the wire repeatedly when navigating around.
 const prefetched = new Set<string>();
+const prefetchInFlight = new Map<string, AbortController>();
 
-/** Fire an Audio.load() against each URL so the browser caches the bytes.
- *  When the user navigates to that song, audioEngine.loadSong gets a warm
- *  cache hit instead of a fresh round-trip. */
+/** Pull each stem URL via fetch() so the FULL bytes land in the browser's
+ *  HTTP cache. When the user navigates to that song, audioEngine.loadSong
+ *  does its own fetch() against the same URL and gets a cache hit
+ *  (effectively instant start).
+ *
+ *  Why not <audio preload="auto">: that only buffers the first few hundred
+ *  KB for playback, not the whole file — so the second navigation still
+ *  Range-requests the rest, losing the prefetch win. */
 function prefetchStems(song: Song | undefined | null) {
   if (!song || typeof window === 'undefined') return;
   for (const name of song.stems || []) {
     const url = `/api/v1/songs/${song.id}/stems/${name}`;
-    if (prefetched.has(url)) continue;
-    prefetched.add(url);
-    try {
-      const a = new Audio();
-      a.preload = 'auto';
-      a.src = url;
-      a.load();
-    } catch {
-      // Some browsers throw on Audio() in non-user-gesture contexts; ignore.
-    }
+    if (prefetched.has(url) || prefetchInFlight.has(url)) continue;
+    const ac = new AbortController();
+    prefetchInFlight.set(url, ac);
+    fetch(url, { signal: ac.signal, credentials: 'same-origin' })
+      .then((r) => r.ok ? r.blob() : null)
+      .then(() => {
+        prefetched.add(url);
+        prefetchInFlight.delete(url);
+      })
+      .catch(() => {
+        prefetchInFlight.delete(url);
+      });
   }
 }
 
@@ -97,16 +105,13 @@ export function useAudioEngine() {
   }, [currentSong?.id, currentSong?.stems?.join(',')]);
 
   // Prefetch the next + prev song's stem URLs so navigation is instant.
-  // Fires after every song change; the prefetched set de-dupes so this
-  // is cheap on repeated firings.
+  // Fires immediately on song change — by the time the user finishes a
+  // 3-4 minute song, the next one's bytes are fully in the HTTP cache, so
+  // audioEngine.loadSong gets a cache hit and resumes within a frame.
   useEffect(() => {
     if (!currentSong) return;
-    // Defer so the current song's loadSong gets the network priority.
-    const t = window.setTimeout(() => {
-      prefetchStems(neighborSong('next'));
-      prefetchStems(neighborSong('prev'));
-    }, 800);
-    return () => window.clearTimeout(t);
+    prefetchStems(neighborSong('next'));
+    prefetchStems(neighborSong('prev'));
   }, [currentSong?.id]);
 
   // Play/pause. We read countIn from the latest store state at the moment of
