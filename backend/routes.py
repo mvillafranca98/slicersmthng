@@ -497,9 +497,16 @@ def update_song_tempo(song_id):
             meta.pop("beat_offset_user", None)
         else:
             try:
-                meta["beat_offset_user"] = max(-2.0, min(2.0, float(v)))
+                # Absolute song-time of beat 0 (the bar-1-beat-1 anchor set
+                # via "Mark 1"). Clamped to a generous ±1 hour range that
+                # bounds songs of any plausible length while still rejecting
+                # garbage like NaN/Infinity (which float() would accept).
+                v = float(v)
+                if not (v == v):  # NaN check
+                    raise ValueError("NaN")
+                meta["beat_offset_user"] = max(-3600.0, min(3600.0, v))
             except (TypeError, ValueError):
-                return jsonify({"error": "beat_offset_user must be -2..+2"}), 400
+                return jsonify({"error": "beat_offset_user must be a finite number"}), 400
 
     save_song_meta(song_id, meta, meta_path)
     return jsonify({"ok": True, "bpm_user": meta.get("bpm_user"), "beat_offset_user": meta.get("beat_offset_user")})

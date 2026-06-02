@@ -23,7 +23,11 @@ interface PlayerState {
   metronomeVolume: number;        // 0-1, persisted to localStorage
   metronomeCountIn: boolean;      // when true, 4 beats of click before stems start
   bpmOverride: number | null;     // when set, replaces detected BPM (per-session)
-  beatOffsetSec: number;          // phase offset for downbeat alignment (-2 to +2 seconds)
+  // Absolute song-time of "beat 0" — the metronome's accented downbeat.
+  // The click grid is { beatOffsetSec + N*beatPeriod | N integer } with the
+  // accent landing every 4 beats from N=0. Set by the "Mark 1" button to
+  // the current playback time, persisted per-song as beat_offset_user.
+  beatOffsetSec: number;
   playMode: 'stop' | 'continue' | 'repeat' | 'shuffle'; // end-of-song behaviour
   expanded: boolean;
   activeSetlist: Setlist | null;
@@ -145,7 +149,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     set({ metronomeCountIn: v });
   },
   setBpmOverride: (v) => set({ bpmOverride: v == null ? null : Math.max(30, Math.min(300, v)) }),
-  setBeatOffsetSec: (v) => set({ beatOffsetSec: Math.max(-2, Math.min(2, v)) }),
+  // No clamp — beatOffsetSec is an absolute song-time and can be
+  // anywhere in (or before) the track. Negative values are valid pre-roll
+  // anchors that get the grid math right for songs that start mid-bar.
+  setBeatOffsetSec: (v) => set({ beatOffsetSec: Number.isFinite(v) ? v : 0 }),
   setPlayMode: (m) => {
     if (typeof window !== 'undefined') localStorage.setItem('slcr.playMode', m);
     set({ playMode: m });

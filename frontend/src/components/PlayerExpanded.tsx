@@ -216,14 +216,10 @@ export function PlayerExpanded() {
       if (avg > 0.2 && avg < 2.0) {
         const tappedBpm = Math.round(60 / avg);
         setBpmOverride(tappedBpm);
-        // Phase: shift the click grid so a click lands on the last tap's
-        // song-time. Modulo into [0, beatPeriod) then map to [-2, +2]
-        // by subtracting beatPeriod when the offset is closer to the
-        // next beat than the previous one (keeps slider value visible).
-        const beatPeriod = 60 / tappedBpm;
-        let phase = next[next.length - 1].song % beatPeriod;
-        if (phase > beatPeriod / 2) phase -= beatPeriod;
-        setBeatOffsetSec(phase);
+        // Anchor the click grid to the LAST tap's song-time. Assumes the
+        // user tapped on a downbeat (which is the natural way to tap a
+        // tempo). The very next click is the accent at that moment.
+        setBeatOffsetSec(next[next.length - 1].song);
       }
     }
 
@@ -235,26 +231,40 @@ export function PlayerExpanded() {
   };
 
   // ---- Mark Beat 1 (per-song persisted downbeat anchor) ----
-  // Clicking captures the current playback time as the downbeat of the song.
-  // The metronome's click grid re-aligns so a click lands exactly here, and
-  // the offset is persisted to the song's meta on the server (PUT /tempo).
-  // Next time this song loads, the saved offset is restored automatically.
+  // Captures the current playback time as the ABSOLUTE anchor for beat 0.
+  // The engine schedules clicks at { anchor + N*beatPeriod | N integer }
+  // with the accent on N % 4 == 0 — so the next click after Mark 1 IS
+  // the accented bar-1-beat-1 at this exact moment, and bars rebuild from
+  // here. Persisted per-song so the saved anchor restores on next load.
   const markBeatOne = async () => {
-    const bpmEffective = bpmOverride ?? bpm;
-    const period = 60 / bpmEffective;
-    // Map into the slider's [-2, +2] range — same compactification as tap-tempo.
-    let phase = currentTime % period;
-    if (phase > period / 2) phase -= period;
-    setBeatOffsetSec(phase);
+    const anchor = currentTime;
+    setBeatOffsetSec(anchor);
     try {
-      await api.updateSongTempo(currentSong.id, { beat_offset_user: phase });
+      await api.updateSongTempo(currentSong.id, { beat_offset_user: anchor });
       fetchSongs();
-      toast.success('Saved beat 1 for this song', {
-        description: 'Clicks will land here next time you open it.',
+      toast.success('Bar 1, beat 1 anchored here', {
+        description: 'Clicks restart from this moment and persist next time.',
       });
     } catch (e) {
       toast.error('Saved locally — failed to persist', { description: (e as Error).message });
     }
+  };
+
+  // Nudge the anchor a few milliseconds in either direction. Useful when
+  // Mark 1 was slightly off-tap; ±25ms is about one human-perceptible
+  // shift on a snare hit. Doesn't auto-persist — user clicks Mark 1 again
+  // (or the Reset button) to save / clear.
+  const nudgeAnchor = (deltaMs: number) => {
+    setBeatOffsetSec(beatOffsetSec + deltaMs / 1000);
+  };
+  const resetTempo = async () => {
+    setBpmOverride(null);
+    // Restore to the auto-detected drum phase (or 0 for older slices).
+    setBeatOffsetSec(currentSong.beat_offset ?? 0);
+    try {
+      await api.updateSongTempo(currentSong.id, { bpm_user: null, beat_offset_user: null });
+      fetchSongs();
+    } catch { /* still reset locally even if persist fails */ }
   };
 
   // ---- Loop in bars ----
@@ -538,20 +548,20 @@ export function PlayerExpanded() {
             </div>
             <p className="mt-2 text-[11px] text-text-muted">Pitch-neutral — slowing down keeps the original key.</p>
 
-            {/* BPM override + beat phase offset */}
+            {/* BPM + downbeat anchor */}
             <div className="mt-4 rounded-xl bg-bg-card/60 border border-white/5 p-3">
               <div className="flex items-center justify-between mb-2">
-                <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted">BPM</div>
+                <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted">BPM &amp; Beat 1</div>
                 <button
                   type="button"
-                  onClick={() => { setBpmOverride(null); setBeatOffsetSec(0); }}
-                  disabled={bpmOverride == null && beatOffsetSec === 0}
-                  className="text-[10px] text-text-muted hover:text-text-primary disabled:opacity-30"
+                  onClick={resetTempo}
+                  className="text-[10px] text-text-muted hover:text-text-primary"
+                  title="Restore the auto-detected BPM and clear your Mark 1"
                 >
                   reset
                 </button>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <input
                   type="number"
                   min={30}
@@ -564,20 +574,20 @@ export function PlayerExpanded() {
                 />
                 <button
                   type="button"
-                  onClick={() => bpmOverride && setBpmOverride(bpmOverride * 2)}
+                  onClick={() => setBpmOverride((bpmOverride ?? bpm) * 2)}
                   title="Double — fix half-time detection"
                   className="h-7 px-2 rounded text-[10px] font-mono bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary"
                 >×2</button>
                 <button
                   type="button"
-                  onClick={() => bpmOverride && setBpmOverride(bpmOverride / 2)}
+                  onClick={() => setBpmOverride((bpmOverride ?? bpm) / 2)}
                   title="Halve — fix double-time detection"
                   className="h-7 px-2 rounded text-[10px] font-mono bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary"
                 >÷2</button>
                 <button
                   type="button"
                   onClick={handleTap}
-                  title="Tap 4+ times in time with the music to set BPM + phase"
+                  title="Tap 4+ times in time with the music to set BPM"
                   className={cn(
                     'h-7 px-2 rounded text-[10px] font-mono border transition-colors',
                     tapCount >= 4
@@ -589,29 +599,34 @@ export function PlayerExpanded() {
                 >
                   Tap{tapCount > 0 ? ` ${tapCount}` : ''}
                 </button>
+                <span className="text-white/20 mx-1">|</span>
                 <button
                   type="button"
                   onClick={markBeatOne}
-                  title="Click on a beat 1 to anchor the metronome grid here — saved per-song"
-                  className="h-7 px-2 rounded text-[10px] font-mono bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary"
+                  title="Click ON the beat — anchors bar 1, beat 1 here. Persists per-song."
+                  className="h-7 px-2 rounded text-[10px] font-mono bg-primary/15 text-primary border border-primary/30 hover:bg-primary/25"
                 >
                   Mark 1
                 </button>
-                <div className="flex-1 ml-2">
-                  <label className="block text-[9px] text-text-muted mb-0.5">Phase {beatOffsetSec.toFixed(2)}s</label>
-                  <input
-                    type="range"
-                    min={-2}
-                    max={2}
-                    step={0.01}
-                    value={beatOffsetSec}
-                    onChange={(e) => setBeatOffsetSec(Number(e.target.value))}
-                    aria-label="Beat phase offset"
-                    className="w-full"
-                  />
-                </div>
+                <button
+                  type="button"
+                  onClick={() => nudgeAnchor(-25)}
+                  title="Shift Mark 1 anchor 25ms earlier"
+                  className="h-7 w-7 grid place-items-center rounded text-[10px] font-mono bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary"
+                >‹‹</button>
+                <button
+                  type="button"
+                  onClick={() => nudgeAnchor(25)}
+                  title="Shift Mark 1 anchor 25ms later"
+                  className="h-7 w-7 grid place-items-center rounded text-[10px] font-mono bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary"
+                >››</button>
+                <span className="text-[10px] font-mono text-text-muted tabular-nums">
+                  anchor: {beatOffsetSec.toFixed(2)}s
+                </span>
               </div>
-              <p className="mt-1 text-[10px] text-text-muted">If the metronome is off, try ×2 / ÷2 or <strong>Tap</strong> 4+ times in time with the music. Phase slider for fine-tuning.</p>
+              <p className="mt-1 text-[10px] text-text-muted">
+                If clicks are off: <strong>Tap</strong> to fix the BPM, then <strong>Mark 1</strong> on a downbeat to anchor the bar — the accent will land on that exact moment. <strong>‹‹ / ››</strong> nudges the anchor by 25ms.
+              </p>
             </div>
 
             {/* Pitch shift (independent of tempo) */}

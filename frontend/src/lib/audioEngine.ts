@@ -320,39 +320,43 @@ class AudioEngine {
     if (!state.metronomeEnabled || !this.playing || !this.ctx) return;
     this.ensureMetronomeGain();
 
-    // BPM override (user-corrected) wins over detected BPM; beat offset shifts
-    // the whole grid in song time (e.g., to align with the actual downbeat
-    // when the song has an intro before beat 1).
+    // Effective tempo: user override wins over the auto-detected BPM.
     const songBpm = Math.max(
       30,
       Math.min(300, state.bpmOverride ?? state.currentSong?.bpm ?? 120),
     );
-    const beatOffset = state.beatOffsetSec || 0;
+    // beatOffsetSec is the ABSOLUTE song-time of beat 0. The click grid is
+    // { anchor + N*period | N integer } with the accent on N % 4 === 0,
+    // so the click at the anchor itself is always the bar-1-beat-1 accent.
+    // This is what "Mark 1" relies on — it sets the anchor to currentTime
+    // and the very next click thereafter is the accent at that moment.
+    const beatAnchor = state.beatOffsetSec || 0;
 
-    // Re-snap the click grid when ANY of these changes:
-    //   - we're behind on the schedule (normal mid-cycle case)
-    //   - BPM changed by more than 0.1 (user override / song change)
-    //   - beat-offset (phase) changed by more than ~10ms (user clicked
-    //     "Mark 1" or moved the Phase slider — without this check the
-    //     grid would stay on its old phase until the next BPM change).
+    // Re-snap when the song moved past the next click (normal advance),
+    // when BPM changed, or when the anchor moved (Mark 1 / Reset).
     if (this.metronomeNextClickTime < this.ctx.currentTime - 0.05
         || Math.abs(this.metronomeBpm - songBpm) > 0.1
-        || Math.abs(this.metronomeBeatOffset - beatOffset) > 0.01) {
+        || Math.abs(this.metronomeBeatOffset - beatAnchor) > 0.01) {
       const songPos = this.currentPosition();
       this.metronomeBpm = songBpm;
-      this.metronomeBeatOffset = beatOffset;
+      this.metronomeBeatOffset = beatAnchor;
       const secondsPerBeatInSong = 60 / songBpm;
-      // Snap to the next whole beat in song time, accounting for offset.
-      const beatsFromOffset = Math.max(0, (songPos - beatOffset) / secondsPerBeatInSong);
-      this.metronomeBeatIndex = Math.ceil(beatsFromOffset);
-      const beatPosInSong = this.metronomeBeatIndex * secondsPerBeatInSong + beatOffset;
+      // Smallest integer N such that anchor + N*period >= songPos.
+      // Allows negative N when songPos is before the anchor (pre-anchor
+      // bars still get clicks, accent still lands on N%4==0).
+      this.metronomeBeatIndex = Math.ceil((songPos - beatAnchor) / secondsPerBeatInSong);
+      const beatPosInSong = beatAnchor + this.metronomeBeatIndex * secondsPerBeatInSong;
       this.metronomeNextClickTime = this.ctx.currentTime + (beatPosInSong - songPos) / this.tempo;
     }
 
     const secondsPerBeatRealtime = 60 / this.metronomeBpm / this.tempo;
     const horizon = this.ctx.currentTime + 0.25;
     while (this.metronomeNextClickTime < horizon) {
-      this.scheduleClick(this.metronomeNextClickTime, this.metronomeBeatIndex % 4 === 0);
+      // ((n % 4) + 4) % 4 instead of plain (n % 4): JS gives negative
+      // remainders for negative n, so a naive check would put the accent
+      // on the wrong beat when N is negative (pre-anchor playback).
+      const accent = (((this.metronomeBeatIndex % 4) + 4) % 4) === 0;
+      this.scheduleClick(this.metronomeNextClickTime, accent);
       this.metronomeNextClickTime += secondsPerBeatRealtime;
       this.metronomeBeatIndex += 1;
     }
