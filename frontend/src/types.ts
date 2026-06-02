@@ -9,6 +9,10 @@ export interface Song {
   artist: string;
   duration: number;
   bpm: number;
+  /** Drum-stem-derived downbeat phase in seconds (0 .. beatPeriod).
+   *  Used as the metronome's initial beat alignment so clicks land on
+   *  the kick drum. Older slices without this field default to 0. */
+  beat_offset?: number;
   key: string;
   stems: string[];
   chords: ChordEvent[];

@@ -103,6 +103,13 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       stems: song ? (stems || defaultStems(song.stems || [])) : {},
       duration: song?.duration || 0,
       currentTime: 0,
+      // Reset per-song tempo overrides on track change. We re-seed
+      // beatOffsetSec from the song's auto-detected drum-derived phase
+      // (falling back to 0 for older slices) so the metronome clicks
+      // land on the kick out of the gate, without the user having to
+      // wiggle the Phase slider on every new song.
+      bpmOverride: null,
+      beatOffsetSec: song?.beat_offset ?? 0,
     });
   },
   setPlaying: (v) => set({ isPlaying: v }),

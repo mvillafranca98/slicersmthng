@@ -160,6 +160,19 @@ def separate(req: dict) -> dict:
     if not stem_files:
         return {"error": f"No stems written. Files: {[p.name for p in separated.iterdir()]}"}
 
+    # --- Better BPM + downbeat phase from the drums stem ---
+    # Re-run beat tracking on the isolated drums (way cleaner signal than
+    # the full mix used above) and capture the first-beat timestamp as the
+    # downbeat phase offset. This is what makes the metronome land on the
+    # actual kick instead of drifting a few ms per bar.
+    drums_path = next((p for p in stem_files if p.stem == "drums"), None)
+    beat_offset_sec = 0.0
+    if drums_path is not None:
+        drums_bpm, drums_phase = _detect_tempo_from_drums(drums_path)
+        if drums_bpm and 30 <= drums_bpm <= 300:
+            bpm = drums_bpm            # overrides the full-mix estimate
+            beat_offset_sec = drums_phase
+
     # --- Path A: upload to R2 if credentials present ---
     bucket = os.environ.get("R2_BUCKET", "").strip()
     account_id = os.environ.get("R2_ACCOUNT_ID", "").strip()
@@ -195,6 +208,7 @@ def separate(req: dict) -> dict:
         return {
             "stems_urls": stems_urls,
             "bpm": bpm,
+            "beat_offset": beat_offset_sec,
             "duration": duration_sec,
             "chords": chord_events,
             "key": detected_key,
@@ -211,6 +225,7 @@ def separate(req: dict) -> dict:
     return {
         "stems": stems_b64,
         "bpm": bpm,
+        "beat_offset": beat_offset_sec,
         "duration": duration_sec,
         "chords": chord_events,
         "key": detected_key,
@@ -218,6 +233,60 @@ def separate(req: dict) -> dict:
         "format": audio_format,
         "song_id": song_id,
     }
+
+
+def _detect_tempo_from_drums(drums_path) -> tuple[float, float]:
+    """Run beat tracking on the isolated drums stem.
+
+    Returns (bpm, downbeat_offset_seconds). The offset is the timestamp of
+    the first detected beat, used by the frontend metronome to phase-align
+    its click grid to the actual kick drum instead of starting at t=0.
+
+    Why a separate pass: librosa.beat.beat_track on the full mix is easily
+    pulled around by sustained vocals/synth pads. Drums are nearly pure
+    transient energy, which is exactly what onset-based beat trackers want.
+
+    Returns (0.0, 0.0) on any failure — caller falls back to its existing
+    full-mix BPM estimate and a zero phase offset.
+    """
+    try:
+        import librosa
+        import numpy as np
+    except Exception:
+        return (0.0, 0.0)
+
+    try:
+        # 22 kHz mono is plenty for percussion analysis and ~3x faster
+        # than the default 44.1 kHz stereo load.
+        y, sr = librosa.load(str(drums_path), sr=22050, mono=True)
+        if y is None or len(y) < sr:  # need at least a second of audio
+            return (0.0, 0.0)
+        # Onset envelope amplifies transients (kick/snare/hat hits) and
+        # suppresses the steady-state energy beat_track gets confused by.
+        onset_env = librosa.onset.onset_strength(y=y, sr=sr)
+        tempo, beats = librosa.beat.beat_track(onset_envelope=onset_env, sr=sr)
+        try:
+            bpm = float(tempo)
+        except (TypeError, ValueError):
+            bpm = float(tempo[0]) if hasattr(tempo, "__len__") and len(tempo) else 0.0
+        if not (30 <= bpm <= 300):
+            return (0.0, 0.0)
+        # First detected beat = our best guess at the downbeat phase.
+        # Not always beat-1-of-bar (librosa returns beats, not bar starts),
+        # but for the metronome to land on real hits this is usually
+        # within ~half a beat of the true downbeat. The user has the Phase
+        # slider for ±2s manual correction.
+        if len(beats) == 0:
+            return (bpm, 0.0)
+        first_beat_sec = float(librosa.frames_to_time(beats[0], sr=sr))
+        # Wrap into [0, beatPeriod) so the metronome scheduler doesn't need
+        # to know about whole-bar offsets.
+        beat_period = 60.0 / bpm
+        phase = first_beat_sec % beat_period
+        return (bpm, phase)
+    except Exception as e:
+        print(f"[drum-tempo] failed: {e}")
+        return (0.0, 0.0)
 
 
 def _detect_key_via_librosa(audio_path) -> str:

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
@@ -92,6 +92,12 @@ export function PlayerExpanded() {
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [editArtist, setEditArtist] = useState('');
+  // Tap-Tempo state. Wall-clock taps measure tempo (intervals match
+  // playback intervals at 100% speed); the last tap's song-time sets
+  // phase so the click grid passes through the user's tap.
+  const tapTimesRef = useRef<{ wall: number; song: number }[]>([]);
+  const tapResetTimerRef = useRef<number | null>(null);
+  const [tapCount, setTapCount] = useState(0); // drives the button label
 
   if (!currentSong) return null;
 
@@ -186,6 +192,46 @@ export function PlayerExpanded() {
       toast.error('Failed to update metadata', { description: (e as Error).message });
     }
     setEditing(false);
+  };
+
+  // ---- Tap Tempo ----
+  // Click 4+ times in time with the music; we average the inter-tap
+  // intervals to set BPM and align the click grid to the most recent tap.
+  // Drops the buffer after 2s of inactivity so a new set of taps starts fresh.
+  const handleTap = () => {
+    const wall = performance.now() / 1000;
+    const song = currentTime;
+    const taps = tapTimesRef.current;
+    const lastWall = taps.length ? taps[taps.length - 1].wall : 0;
+    const next = (taps.length && wall - lastWall > 2)
+      ? [{ wall, song }]                       // gap too big → restart
+      : [...taps, { wall, song }].slice(-8);    // keep the last 8
+    tapTimesRef.current = next;
+    setTapCount(next.length);
+
+    if (next.length >= 4) {
+      let totalGap = 0;
+      for (let i = 1; i < next.length; i++) totalGap += next[i].wall - next[i - 1].wall;
+      const avg = totalGap / (next.length - 1);
+      if (avg > 0.2 && avg < 2.0) {
+        const tappedBpm = Math.round(60 / avg);
+        setBpmOverride(tappedBpm);
+        // Phase: shift the click grid so a click lands on the last tap's
+        // song-time. Modulo into [0, beatPeriod) then map to [-2, +2]
+        // by subtracting beatPeriod when the offset is closer to the
+        // next beat than the previous one (keeps slider value visible).
+        const beatPeriod = 60 / tappedBpm;
+        let phase = next[next.length - 1].song % beatPeriod;
+        if (phase > beatPeriod / 2) phase -= beatPeriod;
+        setBeatOffsetSec(phase);
+      }
+    }
+
+    if (tapResetTimerRef.current) window.clearTimeout(tapResetTimerRef.current);
+    tapResetTimerRef.current = window.setTimeout(() => {
+      tapTimesRef.current = [];
+      setTapCount(0);
+    }, 3000);
   };
 
   // ---- Loop in bars ----
@@ -505,6 +551,21 @@ export function PlayerExpanded() {
                   title="Halve — fix double-time detection"
                   className="h-7 px-2 rounded text-[10px] font-mono bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary"
                 >÷2</button>
+                <button
+                  type="button"
+                  onClick={handleTap}
+                  title="Tap 4+ times in time with the music to set BPM + phase"
+                  className={cn(
+                    'h-7 px-2 rounded text-[10px] font-mono border transition-colors',
+                    tapCount >= 4
+                      ? 'bg-primary/20 text-primary border-primary/40'
+                      : tapCount > 0
+                        ? 'bg-primary/10 text-primary border-primary/20'
+                        : 'bg-white/[0.04] text-text-secondary border-white/5 hover:text-text-primary',
+                  )}
+                >
+                  Tap{tapCount > 0 ? ` ${tapCount}` : ''}
+                </button>
                 <div className="flex-1 ml-2">
                   <label className="block text-[9px] text-text-muted mb-0.5">Phase {beatOffsetSec.toFixed(2)}s</label>
                   <input
@@ -519,7 +580,7 @@ export function PlayerExpanded() {
                   />
                 </div>
               </div>
-              <p className="mt-1 text-[10px] text-text-muted">If the metronome is off-tempo, try ×2 / ÷2 first, then drag the Phase slider until the clicks land on the beat.</p>
+              <p className="mt-1 text-[10px] text-text-muted">If the metronome is off, try ×2 / ÷2 or <strong>Tap</strong> 4+ times in time with the music. Phase slider for fine-tuning.</p>
             </div>
 
             {/* Pitch shift (independent of tempo) */}

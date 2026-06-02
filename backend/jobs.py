@@ -308,6 +308,11 @@ def _process_audio_to_stems(
     # Chord events from Modal (autochord). Empty if Modal isn't redeployed
     # with the new image yet, or autochord couldn't recognize the audio.
     chords: list = list(sep.get("chords") or [])
+    # Drum-stem-derived downbeat phase, in seconds (0 <= offset < beatPeriod).
+    # The frontend metronome adds this to its click grid so clicks land on
+    # the actual kick instead of t=0. Older slices without this field render
+    # as 0.0 (i.e. unchanged behaviour).
+    beat_offset = float(sep.get("beat_offset") or 0.0)
 
     thumb_path = song_dir / "thumbnail.jpg"
     thumbnail_url = meta_overrides.get("thumbnail_url") or ""
@@ -364,6 +369,7 @@ def _process_audio_to_stems(
         "cover_url": cover_url_remote,         # R2 URL or None
         "duration": duration_sec,
         "bpm": bpm,
+        "beat_offset": beat_offset,
         "key": key,
         "chords": chords,
         "stems": stem_names or MODEL_STEMS.get(model, ["vocals", "drums", "bass", "other"]),
