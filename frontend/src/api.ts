@@ -52,6 +52,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(patch),
     }),
+  splitStem: (songId: string, sourceStem: string, method: 'lr' | 'karaoke') =>
+    request<{ job_id: string }>(`/songs/${songId}/split`, {
+      method: 'POST',
+      body: JSON.stringify({ source_stem: sourceStem, method }),
+    }),
   saveSnapshot: (songId: string, snapshot: import('./types').MixSnapshot) =>
     request<{ ok: boolean }>(`/songs/${songId}/snapshots`, {
       method: 'POST',

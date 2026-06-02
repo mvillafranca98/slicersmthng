@@ -654,6 +654,76 @@ def reprocess_song(song_id):
     # For v1 we return 501; full impl would re-run Demucs
     return jsonify({"error": "Re-process not implemented in v1"}), 501
 
+
+@api.route("/songs/<song_id>/split", methods=["POST"])
+def split_song_stem(song_id):
+    """On-demand stem refinement.
+
+    Payload:
+        { "source_stem": "vocals", "method": "karaoke" }   # lead+backing via UVR
+        { "source_stem": "guitar", "method": "lr" }        # L+R channels via ffmpeg
+
+    Kicks off a background job (so the karaoke path, which takes ~30s on
+    Modal GPU, doesn't time out the HTTP request). Returns a job_id; the
+    frontend polls /jobs/<id> and refetches the song meta when the job
+    completes. SocketIO events fire alongside for live progress display.
+    """
+    from backend.split import run_split
+
+    payload = request.get_json() or {}
+    source_stem = (payload.get("source_stem") or "").strip()
+    method = (payload.get("method") or "").strip()
+    if method not in ("lr", "karaoke"):
+        return jsonify({"error": "method must be 'lr' or 'karaoke'"}), 400
+    if not source_stem:
+        return jsonify({"error": "source_stem is required"}), 400
+
+    song_dir = get_song_dir(storage, song_id)
+    meta_path = song_dir / "song_meta.json"
+    if not meta_path.exists():
+        return jsonify({"error": "Song not found"}), 404
+    with open(meta_path) as f:
+        meta = json.load(f)
+
+    if source_stem not in (meta.get("stems") or []):
+        return jsonify({"error": f"Song has no stem named '{source_stem}'. Has: {meta.get('stems')}"}), 400
+
+    job_id = uuid.uuid4().hex
+    with jobs_lock:
+        jobs[job_id] = {
+            "status": "running",
+            "stage": "queued",
+            "percent": 0,
+            "message": f"Splitting {source_stem} via {method}...",
+            "title": f"{meta.get('title','?')} — {method} split",
+        }
+
+    def progress(stage: str, percent: int, message: str):
+        with jobs_lock:
+            jobs[job_id].update({"stage": stage, "percent": percent, "message": message})
+        _emit_job_progress(job_id, stage, percent, message)
+
+    def worker():
+        try:
+            updated = run_split(meta, meta_path, source_stem, method, progress)
+            # Re-read notes + thumbnail_url for the result payload
+            updated["notes"] = load_notes().get(song_id, "")
+            updated["thumbnail_url"] = f"/api/v1/songs/{song_id}/thumbnail"
+            with jobs_lock:
+                jobs[job_id].update({"status": "done", "stage": "complete",
+                                     "percent": 100, "message": "Done",
+                                     "result": updated})
+            _emit_job_complete(job_id, updated)
+        except Exception as e:
+            with jobs_lock:
+                jobs[job_id].update({"status": "error", "stage": "failed",
+                                     "percent": 100, "message": str(e),
+                                     "error": str(e)})
+            _emit_job_error(job_id, str(e))
+
+    threading.Thread(target=worker, daemon=True, name=f"split-{job_id[:8]}").start()
+    return jsonify({"job_id": job_id})
+
 @api.route("/songs/<song_id>/snapshots", methods=["GET"])
 def get_snapshots(song_id):
     snapshot = get_snapshot(song_id)

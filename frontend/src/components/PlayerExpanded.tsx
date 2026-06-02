@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import {
   ChevronDown,
   Check,
+  Loader2,
   Music2,
   Pause,
   Pencil,
@@ -12,6 +13,7 @@ import {
   Repeat1,
   Rewind,
   FastForward,
+  Scissors,
   Shuffle,
   SkipBack,
   SkipForward,
@@ -33,11 +35,19 @@ import { LyricsPanel } from './LyricsPanel';
 
 const STEM_COLORS: Record<string, string> = {
   vocals: '#FF6B8A',
+  vocals_lead: '#FF6B8A',
+  vocals_backing: '#FFB6C1',
   drums: '#FFB347',
   bass: '#00E5C3',
   guitar: '#5BDB6B',
+  guitar_left: '#5BDB6B',
+  guitar_right: '#9BEFA8',
   piano: '#C47FFF',
+  piano_left: '#C47FFF',
+  piano_right: '#E0B8FF',
   other: '#8899AA',
+  other_left: '#8899AA',
+  other_right: '#B0BDC8',
   mytake: '#FFD166',
 };
 
@@ -283,6 +293,62 @@ export function PlayerExpanded() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSong?.id]);
 
+  // ---- On-demand stem refinement ----
+  // Two split modes, applied per-stem:
+  //   'karaoke' → run UVR-MDX-NET on the vocals stem to separate lead vs
+  //              backing. Slow (~30s on Modal GPU). Adds <stem>_lead +
+  //              <stem>_backing alongside the original.
+  //   'lr'     → ffmpeg-split a stereo stem (guitar/piano/other) into
+  //              <stem>_left + <stem>_right. Cheap (~2s on Render).
+  // The original stem is preserved so the user can A/B mix the merged
+  // vs split versions.
+  const [splittingStem, setSplittingStem] = useState<string | null>(null);
+
+  const applicableSplit = (stemName: string): { method: 'lr' | 'karaoke'; label: string; title: string } | null => {
+    // Don't offer to split a stem that's already a result of a split.
+    if (stemName.endsWith('_lead') || stemName.endsWith('_backing')) return null;
+    if (stemName.endsWith('_left') || stemName.endsWith('_right')) return null;
+    if (stemName === 'mytake') return null;
+    if (stemName === 'vocals') {
+      return { method: 'karaoke', label: 'lead/bk', title: 'Split into lead + backing vocals (UVR on Modal, ~30s)' };
+    }
+    if (['guitar', 'piano', 'other'].includes(stemName)) {
+      return { method: 'lr', label: 'L/R', title: 'Split stereo into separate L + R channel tracks (useful when two parts are panned)' };
+    }
+    // drums + bass are usually mono-mixed; L/R split rarely helps.
+    return null;
+  };
+
+  const handleSplit = async (stemName: string, method: 'lr' | 'karaoke') => {
+    setSplittingStem(stemName);
+    const t = toast.loading(method === 'karaoke'
+      ? `Splitting ${stemName} into lead + backing (UVR, ~30s)…`
+      : `Splitting ${stemName} into L + R channels…`);
+    try {
+      const { job_id } = await api.splitStem(currentSong.id, stemName, method);
+      // Poll until done. Reasonable cadence: 1.5s — karaoke takes ~30s so
+      // we'll only poll ~20 times worst-case.
+      let attempts = 0;
+      const maxAttempts = 200;  // ~5 minutes ceiling
+      while (attempts++ < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const status = await api.jobStatus(job_id);
+        if (status.status === 'done') break;
+        if (status.status === 'error') throw new Error(status.error || status.message || 'Split failed');
+      }
+      await fetchSongs();
+      // After fetchSongs the library is refreshed; re-pick the same song
+      // so the mixer's stem list updates without a manual re-click.
+      const updated = useLibraryStore.getState().songs.find((s) => s.id === currentSong.id);
+      if (updated) setCurrentSong(updated);
+      toast.success(method === 'karaoke' ? 'Lead + backing added' : 'L + R tracks added', { id: t });
+    } catch (e) {
+      toast.error('Split failed', { id: t, description: (e as Error).message });
+    } finally {
+      setSplittingStem(null);
+    }
+  };
+
   const resetTempo = async () => {
     setBpmOverride(null);
     // Restore to the auto-detected drum phase (or 0 for older slices).
@@ -495,9 +561,29 @@ export function PlayerExpanded() {
                   )}
                   style={{ borderLeftWidth: 3, borderLeftColor: color }}
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-text-primary capitalize truncate">{name}</span>
-                    <span className="text-[10px] font-mono text-text-muted tabular-nums">{Math.round(st.volume * 100)}%</span>
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="text-sm font-medium text-text-primary capitalize truncate flex-1 min-w-0">{name.replace(/_/g, ' ')}</span>
+                    {(() => {
+                      const sp = applicableSplit(name);
+                      if (!sp) return null;
+                      const isLoading = splittingStem === name;
+                      const isAnyBusy = splittingStem !== null;
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => handleSplit(name, sp.method)}
+                          disabled={isAnyBusy}
+                          title={sp.title}
+                          className="shrink-0 h-5 px-1.5 inline-flex items-center gap-1 rounded text-[9px] font-mono bg-white/[0.04] border border-white/5 text-text-muted hover:text-primary hover:border-primary/40 disabled:opacity-30"
+                        >
+                          {isLoading
+                            ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                            : <Scissors className="w-2.5 h-2.5" />}
+                          {isLoading ? '…' : sp.label}
+                        </button>
+                      );
+                    })()}
+                    <span className="text-[10px] font-mono text-text-muted tabular-nums shrink-0">{Math.round(st.volume * 100)}%</span>
                   </div>
                   <div className="flex gap-1">
                     <button
