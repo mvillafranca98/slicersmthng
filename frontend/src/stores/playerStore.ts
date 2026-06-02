@@ -98,18 +98,30 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   activeSetlist: null,
   queueIndex: 0,
   setCurrentSong(song, stems) {
-    set({
-      currentSong: song,
-      stems: song ? (stems || defaultStems(song.stems || [])) : {},
-      duration: song?.duration || 0,
-      currentTime: 0,
-      // Reset per-song tempo overrides on track change. We re-seed
-      // beatOffsetSec from the song's auto-detected drum-derived phase
-      // (falling back to 0 for older slices) so the metronome clicks
-      // land on the kick out of the gate, without the user having to
-      // wiggle the Phase slider on every new song.
-      bpmOverride: null,
-      beatOffsetSec: song?.beat_offset ?? 0,
+    set((state) => {
+      // Carry mute/solo/volume across song changes by stem NAME. Lets the
+      // user mute vocals once and keep practicing through a whole setlist
+      // without re-clicking on every song. Stems not present in the prev
+      // song (e.g. "guitar" when stepping from a 4-stem slice to a 6-stem)
+      // fall back to defaults.
+      const prev = state.stems;
+      const carryStems: Record<string, StemState> = {};
+      if (song) {
+        for (const name of song.stems || []) {
+          carryStems[name] = prev[name] ? { ...prev[name] } : defaultStemState();
+        }
+      }
+      // Tempo override priority: user-set > drum-auto-detected > zero.
+      const beatOffset = song?.beat_offset_user ?? song?.beat_offset ?? 0;
+      const bpmOverride = song?.bpm_user ?? null;
+      return {
+        currentSong: song,
+        stems: song ? (stems || carryStems) : {},
+        duration: song?.duration || 0,
+        currentTime: 0,
+        bpmOverride,
+        beatOffsetSec: beatOffset,
+      };
     });
   },
   setPlaying: (v) => set({ isPlaying: v }),

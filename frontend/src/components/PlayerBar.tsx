@@ -50,11 +50,11 @@ export function PlayerBar() {
     if (activeSetlist && queueIndex > 0) {
       const prevEntry = activeSetlist.songs[queueIndex - 1];
       const song = librarySongs.find((s) => s.id === prevEntry?.song_id);
-      if (song) { setActiveSetlist(activeSetlist, queueIndex - 1); setCurrentSong(song); return; }
+      if (song) { setActiveSetlist(activeSetlist, queueIndex - 1); setCurrentSong(song); setPlaying(true); return; }
     }
     if (librarySongs.length > 1) {
       const idx = librarySongs.findIndex((s) => s.id === currentSong.id);
-      if (idx > 0) { setCurrentSong(librarySongs[idx - 1]); return; }
+      if (idx > 0) { setCurrentSong(librarySongs[idx - 1]); setPlaying(true); return; }
     }
     seek(0);
   };
@@ -62,12 +62,12 @@ export function PlayerBar() {
     if (activeSetlist && queueIndex < activeSetlist.songs.length - 1) {
       const nextEntry = activeSetlist.songs[queueIndex + 1];
       const song = librarySongs.find((s) => s.id === nextEntry?.song_id);
-      if (song) { setActiveSetlist(activeSetlist, queueIndex + 1); setCurrentSong(song); return; }
+      if (song) { setActiveSetlist(activeSetlist, queueIndex + 1); setCurrentSong(song); setPlaying(true); return; }
     }
     if (librarySongs.length > 1) {
       const idx = librarySongs.findIndex((s) => s.id === currentSong.id);
       const next = librarySongs[(idx + 1) % librarySongs.length];
-      if (next) setCurrentSong(next);
+      if (next) { setCurrentSong(next); setPlaying(true); }
     }
   };
   const hasPrev = currentTime > 3 || (activeSetlist != null && queueIndex > 0)

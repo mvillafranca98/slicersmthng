@@ -13,6 +13,12 @@ export interface Song {
    *  Used as the metronome's initial beat alignment so clicks land on
    *  the kick drum. Older slices without this field default to 0. */
   beat_offset?: number;
+  /** User's manual BPM override, persisted via PUT /songs/<id>/tempo.
+   *  Wins over auto-detected `bpm` when present. */
+  bpm_user?: number | null;
+  /** User's manual downbeat phase override (-2..+2s), persisted.
+   *  Wins over `beat_offset` when present. Set by the "Mark beat 1" button. */
+  beat_offset_user?: number | null;
   key: string;
   stems: string[];
   chords: ChordEvent[];

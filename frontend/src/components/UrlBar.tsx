@@ -34,7 +34,11 @@ function getSocket() {
 
 export function UrlBar() {
   const [url, setUrl] = useState('');
-  const [model, setModel] = useState('htdemucs');
+  // Default to the 6-stem model so guitar + piano get their own tracks
+  // instead of being lumped into "other" (which made the guitar player's
+  // experience much worse — they'd find their part hiding in the residuals).
+  // Takes a bit longer to slice but it's worth it.
+  const [model, setModel] = useState('htdemucs_6s');
   const [format, setFormat] = useState('mp3');
   const [importing, setImporting] = useState(false);
   const [showOptions, setShowOptions] = useState(false);

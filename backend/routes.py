@@ -15,7 +15,7 @@ from backend.utils import (
     validate_stem_name,
 )
 from backend.jobs import run_import, run_import_file
-from backend.storage import sync_metas_from_r2, save_song_meta, save_song_lyrics, delete_song_from_r2, r2_status
+from backend.storage import sync_metas_from_r2, save_song_meta, save_song_lyrics, delete_song_from_r2, r2_status, hydrate_data_blobs
 from backend.metadata import enrich_metadata
 from backend.data import (
     load_setlists,
@@ -75,6 +75,15 @@ def _hydrate_from_r2_async():
             print(f"[storage] hydrated {hydrated} song meta(s) from R2 at startup", flush=True)
     except Exception as e:
         print(f"[storage] startup R2 sync failed (non-fatal): {e}", flush=True)
+    # Also restore setlists / mix_snapshots / song_notes from R2 — without
+    # this, Render's ephemeral disk wipe means setlists vanish on every
+    # cold start.
+    try:
+        n = hydrate_data_blobs(storage / "data")
+        if n:
+            print(f"[storage] hydrated {n} data blob(s) from R2 at startup", flush=True)
+    except Exception as e:
+        print(f"[storage] startup data-blob hydrate failed (non-fatal): {e}", flush=True)
 
 
 threading.Thread(target=_hydrate_from_r2_async, daemon=True, name="r2-hydrate").start()
@@ -453,6 +462,49 @@ def update_song_meta(song_id):
     return jsonify(meta)
 
 
+@api.route("/songs/<song_id>/tempo", methods=["PUT"])
+def update_song_tempo(song_id):
+    """Persist the user's BPM + downbeat-phase override for a song.
+
+    Payload (all optional, null clears):
+        { "bpm_user": 96, "beat_offset_user": 0.18 }
+
+    Why a dedicated endpoint instead of stuffing into /meta: tempo edits
+    happen MUCH more often than title edits (every time someone clicks
+    'Mark beat 1') and shouldn't carry the cover-art + lyrics-cache
+    invalidation side effects that /meta does.
+    """
+    payload = request.get_json() or {}
+    song_dir = get_song_dir(storage, song_id)
+    meta_path = song_dir / "song_meta.json"
+    if not meta_path.exists():
+        return jsonify({"error": "Song not found"}), 404
+    with open(meta_path) as f:
+        meta = json.load(f)
+
+    if "bpm_user" in payload:
+        v = payload["bpm_user"]
+        if v is None:
+            meta.pop("bpm_user", None)
+        else:
+            try:
+                meta["bpm_user"] = max(30, min(300, float(v)))
+            except (TypeError, ValueError):
+                return jsonify({"error": "bpm_user must be a number 30..300"}), 400
+    if "beat_offset_user" in payload:
+        v = payload["beat_offset_user"]
+        if v is None:
+            meta.pop("beat_offset_user", None)
+        else:
+            try:
+                meta["beat_offset_user"] = max(-2.0, min(2.0, float(v)))
+            except (TypeError, ValueError):
+                return jsonify({"error": "beat_offset_user must be -2..+2"}), 400
+
+    save_song_meta(song_id, meta, meta_path)
+    return jsonify({"ok": True, "bpm_user": meta.get("bpm_user"), "beat_offset_user": meta.get("beat_offset_user")})
+
+
 @api.route("/songs/<song_id>/lyrics")
 def get_song_lyrics(song_id):
     """Fetch (and cache) lyrics for a song from LRCLib (free, open API).
@@ -494,9 +546,16 @@ def get_song_lyrics(song_id):
     # match was low-confidence), do it now. Bad filenames usually have bad
     # lyric search results too; correcting the metadata here makes "Find
     # lyrics" work as a one-click clean-up for older imports.
+    #
+    # IMPORTANT: also treat user-edits as authoritative. Otherwise hitting
+    # "Find lyrics" after manually fixing the title would re-overwrite the
+    # user's edit with whatever MusicBrainz returned for the old title.
     already_enriched = (
-        meta.get("metadata_source") == "musicbrainz"
-        and int(meta.get("metadata_confidence") or 0) >= 75
+        meta.get("metadata_source") == "user-edit"
+        or (
+            meta.get("metadata_source") == "musicbrainz"
+            and int(meta.get("metadata_confidence") or 0) >= 75
+        )
     )
     if not already_enriched:
         enriched = enrich_metadata(title, artist if artist.lower() != "uploaded" else "")

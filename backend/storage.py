@@ -111,6 +111,56 @@ def save_song_cover_art(song_id: str, source_url: str, local_path: Path) -> str 
         return None
 
 
+def save_data_blob_to_r2(name: str, data) -> None:
+    """Push one of our small JSON state files (setlists, mix_snapshots,
+    song_notes) up to R2 at data/<name>. Best-effort: never raises."""
+    cfg = _r2_config()
+    if not cfg:
+        return
+    client, bucket = cfg
+    try:
+        client.put_object(
+            Bucket=bucket,
+            Key=f"data/{name}",
+            Body=json.dumps(data, indent=2).encode("utf-8"),
+            ContentType="application/json",
+        )
+    except Exception as e:
+        print(f"[storage] R2 save_data_blob({name}) failed: {e}")
+
+
+def load_data_blob_from_r2(name: str):
+    """Try to fetch one of our small JSON state files from R2. Returns
+    parsed JSON on success, None on any failure (no R2, key missing,
+    parse error). Caller falls back to local disk."""
+    cfg = _r2_config()
+    if not cfg:
+        return None
+    client, bucket = cfg
+    try:
+        resp = client.get_object(Bucket=bucket, Key=f"data/{name}")
+        return json.loads(resp["Body"].read().decode("utf-8"))
+    except Exception:
+        # NoSuchKey is the common case on a fresh bucket — silent return.
+        return None
+
+
+def hydrate_data_blobs(local_data_dir: Path) -> int:
+    """Pull setlists.json / mix_snapshots.json / song_notes.json down from
+    R2 into the local cache so they survive container restarts on Render's
+    ephemeral disk. Returns the count of blobs hydrated."""
+    local_data_dir.mkdir(parents=True, exist_ok=True)
+    hydrated = 0
+    for name in ("setlists.json", "mix_snapshots.json", "song_notes.json"):
+        blob = load_data_blob_from_r2(name)
+        if blob is None:
+            continue
+        with open(local_data_dir / name, "w") as f:
+            json.dump(blob, f, indent=2)
+        hydrated += 1
+    return hydrated
+
+
 def save_song_lyrics(song_id: str, lyrics: dict, local_path: Path) -> None:
     """Persist a fetched lyrics blob both locally and to R2."""
     local_path.parent.mkdir(parents=True, exist_ok=True)

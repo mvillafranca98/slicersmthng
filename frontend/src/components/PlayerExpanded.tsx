@@ -128,11 +128,11 @@ export function PlayerExpanded() {
     if (activeSetlist && queueIndex > 0) {
       const prevEntry = activeSetlist.songs[queueIndex - 1];
       const song = librarySongs.find((s) => s.id === prevEntry?.song_id);
-      if (song) { setActiveSetlist(activeSetlist, queueIndex - 1); setCurrentSong(song); return; }
+      if (song) { setActiveSetlist(activeSetlist, queueIndex - 1); setCurrentSong(song); setPlaying(true); return; }
     }
     if (librarySongs.length > 1) {
       const idx = librarySongs.findIndex((s) => s.id === currentSong.id);
-      if (idx > 0) { setCurrentSong(librarySongs[idx - 1]); return; }
+      if (idx > 0) { setCurrentSong(librarySongs[idx - 1]); setPlaying(true); return; }
     }
     seek(0);
   };
@@ -140,12 +140,12 @@ export function PlayerExpanded() {
     if (activeSetlist && queueIndex < activeSetlist.songs.length - 1) {
       const nextEntry = activeSetlist.songs[queueIndex + 1];
       const song = librarySongs.find((s) => s.id === nextEntry?.song_id);
-      if (song) { setActiveSetlist(activeSetlist, queueIndex + 1); setCurrentSong(song); return; }
+      if (song) { setActiveSetlist(activeSetlist, queueIndex + 1); setCurrentSong(song); setPlaying(true); return; }
     }
     if (librarySongs.length > 1) {
       const idx = librarySongs.findIndex((s) => s.id === currentSong.id);
       const next = librarySongs[(idx + 1) % librarySongs.length];
-      if (next) setCurrentSong(next);
+      if (next) { setCurrentSong(next); setPlaying(true); }
     }
   };
   const hasPrev = currentTime > 3 || (activeSetlist != null && queueIndex > 0)
@@ -232,6 +232,29 @@ export function PlayerExpanded() {
       tapTimesRef.current = [];
       setTapCount(0);
     }, 3000);
+  };
+
+  // ---- Mark Beat 1 (per-song persisted downbeat anchor) ----
+  // Clicking captures the current playback time as the downbeat of the song.
+  // The metronome's click grid re-aligns so a click lands exactly here, and
+  // the offset is persisted to the song's meta on the server (PUT /tempo).
+  // Next time this song loads, the saved offset is restored automatically.
+  const markBeatOne = async () => {
+    const bpmEffective = bpmOverride ?? bpm;
+    const period = 60 / bpmEffective;
+    // Map into the slider's [-2, +2] range — same compactification as tap-tempo.
+    let phase = currentTime % period;
+    if (phase > period / 2) phase -= period;
+    setBeatOffsetSec(phase);
+    try {
+      await api.updateSongTempo(currentSong.id, { beat_offset_user: phase });
+      fetchSongs();
+      toast.success('Saved beat 1 for this song', {
+        description: 'Clicks will land here next time you open it.',
+      });
+    } catch (e) {
+      toast.error('Saved locally — failed to persist', { description: (e as Error).message });
+    }
   };
 
   // ---- Loop in bars ----
@@ -565,6 +588,14 @@ export function PlayerExpanded() {
                   )}
                 >
                   Tap{tapCount > 0 ? ` ${tapCount}` : ''}
+                </button>
+                <button
+                  type="button"
+                  onClick={markBeatOne}
+                  title="Click on a beat 1 to anchor the metronome grid here — saved per-song"
+                  className="h-7 px-2 rounded text-[10px] font-mono bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary"
+                >
+                  Mark 1
                 </button>
                 <div className="flex-1 ml-2">
                   <label className="block text-[9px] text-text-muted mb-0.5">Phase {beatOffsetSec.toFixed(2)}s</label>

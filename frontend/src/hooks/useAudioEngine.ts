@@ -4,6 +4,53 @@ import { useLibraryStore } from '../stores/libraryStore';
 import { audioEngine } from '../lib/audioEngine';
 import type { Song } from '../types';
 
+// Track URLs we've already prefetched in this session so we don't kick off
+// the same Range-fetch dozens of times when songs shuffle around.
+const prefetched = new Set<string>();
+
+/** Fire an Audio.load() against each URL so the browser caches the bytes.
+ *  When the user navigates to that song, audioEngine.loadSong gets a warm
+ *  cache hit instead of a fresh round-trip. */
+function prefetchStems(song: Song | undefined | null) {
+  if (!song || typeof window === 'undefined') return;
+  for (const name of song.stems || []) {
+    const url = `/api/v1/songs/${song.id}/stems/${name}`;
+    if (prefetched.has(url)) continue;
+    prefetched.add(url);
+    try {
+      const a = new Audio();
+      a.preload = 'auto';
+      a.src = url;
+      a.load();
+    } catch {
+      // Some browsers throw on Audio() in non-user-gesture contexts; ignore.
+    }
+  }
+}
+
+/** Resolve the next/prev song relative to the active setlist or library. */
+function neighborSong(direction: 'next' | 'prev'): Song | null {
+  const ps = usePlayerStore.getState();
+  const songs = useLibraryStore.getState().songs;
+  const currentId = ps.currentSong?.id;
+  if (ps.activeSetlist && ps.activeSetlist.songs.length > 0) {
+    const idx = ps.queueIndex + (direction === 'next' ? 1 : -1);
+    if (idx >= 0 && idx < ps.activeSetlist.songs.length) {
+      const entry = ps.activeSetlist.songs[idx];
+      const s = songs.find((x) => x.id === entry.song_id);
+      if (s) return s;
+    }
+    return null;
+  }
+  if (songs.length < 2 || !currentId) return null;
+  const i = songs.findIndex((s) => s.id === currentId);
+  if (i < 0) return null;
+  const j = (direction === 'next')
+    ? (i + 1) % songs.length
+    : (i - 1 + songs.length) % songs.length;
+  return songs[j] || null;
+}
+
 /**
  * Wires the audio engine singleton to the player store. Mount in exactly
  * one place (Layout/PlayerBar). Triggers loadSong on song change, and
@@ -19,20 +66,48 @@ export function useAudioEngine() {
   const metronomeVolume = usePlayerStore((s) => s.metronomeVolume);
 
   // Load stems on song change. Songs without stems become a no-op load.
+  // After load, if isPlaying is still true (user was playing, song
+  // changed via Next button or end-of-song auto-advance), resume playback
+  // automatically so they don't have to click Play between every track.
   useEffect(() => {
     let cancelled = false;
     if (!currentSong) {
       audioEngine.loadSong('', []);
       return;
     }
-    if (audioEngine.isReady(currentSong.id)) return;
+    const resumeIfStillPlaying = () => {
+      if (cancelled) return;
+      if (usePlayerStore.getState().isPlaying) {
+        // No count-in on auto-advance — the user is mid-flow, don't
+        // make them wait 4 beats every track.
+        audioEngine.play({ countInBeats: 0 });
+      }
+    };
+    if (audioEngine.isReady(currentSong.id)) {
+      resumeIfStillPlaying();
+      return;
+    }
     audioEngine.loadSong(currentSong.id, currentSong.stems || [])
+      .then(resumeIfStillPlaying)
       .catch((err) => {
         if (cancelled) return;
         console.error('audioEngine.loadSong failed', err);
       });
     return () => { cancelled = true; };
   }, [currentSong?.id, currentSong?.stems?.join(',')]);
+
+  // Prefetch the next + prev song's stem URLs so navigation is instant.
+  // Fires after every song change; the prefetched set de-dupes so this
+  // is cheap on repeated firings.
+  useEffect(() => {
+    if (!currentSong) return;
+    // Defer so the current song's loadSong gets the network priority.
+    const t = window.setTimeout(() => {
+      prefetchStems(neighborSong('next'));
+      prefetchStems(neighborSong('prev'));
+    }, 800);
+    return () => window.clearTimeout(t);
+  }, [currentSong?.id]);
 
   // Play/pause. We read countIn from the latest store state at the moment of
   // transition so toggling it on/off between plays takes effect immediately.
