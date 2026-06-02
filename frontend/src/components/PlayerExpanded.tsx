@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
@@ -198,9 +198,12 @@ export function PlayerExpanded() {
   // Click 4+ times in time with the music; we average the inter-tap
   // intervals to set BPM and align the click grid to the most recent tap.
   // Drops the buffer after 2s of inactivity so a new set of taps starts fresh.
-  const handleTap = () => {
+  const handleTap = (e?: React.PointerEvent) => {
+    e?.preventDefault();
     const wall = performance.now() / 1000;
-    const song = currentTime;
+    // Live audio clock — not React's currentTime (which lags by up to one
+    // rAF frame, ~16ms). Matters for the phase anchor.
+    const song = audioEngine.getPosition();
     const taps = tapTimesRef.current;
     const lastWall = taps.length ? taps[taps.length - 1].wall : 0;
     const next = (taps.length && wall - lastWall > 2)
@@ -231,22 +234,27 @@ export function PlayerExpanded() {
   };
 
   // ---- Mark Beat 1 (per-song persisted downbeat anchor) ----
-  // Captures the current playback time as the ABSOLUTE anchor for beat 0.
-  // The engine schedules clicks at { anchor + N*beatPeriod | N integer }
-  // with the accent on N % 4 == 0 — so the next click after Mark 1 IS
-  // the accented bar-1-beat-1 at this exact moment, and bars rebuild from
-  // here. Persisted per-song so the saved anchor restores on next load.
-  const markBeatOne = async () => {
-    const anchor = currentTime;
+  // Captures the playback position at the EXACT pointer-down event using
+  // the audio engine's live clock (drift-free vs the React `currentTime`
+  // which is up to one rAF frame stale). Pointer-down also fires ~50ms
+  // sooner than onClick, which fires on pointer-UP. Combined with the
+  // engine's cancelPendingClicks(), Mark 1 takes effect within ~10ms of
+  // your tap instead of feeling like a half-beat lag.
+  const markBeatOne = async (e?: React.PointerEvent) => {
+    // Read straight from the audio clock — same source the scheduler uses,
+    // so there's no quantization error.
+    const anchor = audioEngine.getPosition();
     setBeatOffsetSec(anchor);
+    // Avoid the click-after-pointerdown firing twice on the same gesture.
+    e?.preventDefault();
     try {
       await api.updateSongTempo(currentSong.id, { beat_offset_user: anchor });
       fetchSongs();
       toast.success('Bar 1, beat 1 anchored here', {
         description: 'Clicks restart from this moment and persist next time.',
       });
-    } catch (e) {
-      toast.error('Saved locally — failed to persist', { description: (e as Error).message });
+    } catch (err) {
+      toast.error('Saved locally — failed to persist', { description: (err as Error).message });
     }
   };
 
@@ -257,6 +265,24 @@ export function PlayerExpanded() {
   const nudgeAnchor = (deltaMs: number) => {
     setBeatOffsetSec(beatOffsetSec + deltaMs / 1000);
   };
+  // Keyboard shortcuts while the expanded player is open:
+  //   M = Mark beat 1 (lowest-latency input — keyboard down event fires
+  //       before pointer-up, ahead of even onPointerDown on a mouse)
+  //   T = Tap-tempo
+  // We skip when the user is typing in an input (title edit, BPM number).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (e.key === 'm' || e.key === 'M') { e.preventDefault(); markBeatOne(); }
+      else if (e.key === 't' || e.key === 'T') { e.preventDefault(); handleTap(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // markBeatOne / handleTap close over current values; recreate on song change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSong?.id]);
+
   const resetTempo = async () => {
     setBpmOverride(null);
     // Restore to the auto-detected drum phase (or 0 for older slices).
@@ -586,8 +612,8 @@ export function PlayerExpanded() {
                 >÷2</button>
                 <button
                   type="button"
-                  onClick={handleTap}
-                  title="Tap 4+ times in time with the music to set BPM"
+                  onPointerDown={handleTap}
+                  title="Tap (press-down) 4+ times in time with the music to set BPM"
                   className={cn(
                     'h-7 px-2 rounded text-[10px] font-mono border transition-colors',
                     tapCount >= 4
@@ -602,9 +628,10 @@ export function PlayerExpanded() {
                 <span className="text-white/20 mx-1">|</span>
                 <button
                   type="button"
-                  onClick={markBeatOne}
-                  title="Click ON the beat — anchors bar 1, beat 1 here. Persists per-song."
-                  className="h-7 px-2 rounded text-[10px] font-mono bg-primary/15 text-primary border border-primary/30 hover:bg-primary/25"
+                  onPointerDown={markBeatOne}
+                  // No onClick: pointerdown already handled the gesture.
+                  title="PRESS on the beat — anchors bar 1, beat 1 here. Press-down latency, not click."
+                  className="h-7 px-2 rounded text-[10px] font-mono bg-primary/15 text-primary border border-primary/30 hover:bg-primary/25 active:bg-primary/30"
                 >
                   Mark 1
                 </button>
@@ -625,7 +652,7 @@ export function PlayerExpanded() {
                 </span>
               </div>
               <p className="mt-1 text-[10px] text-text-muted">
-                If clicks are off: <strong>Tap</strong> to fix the BPM, then <strong>Mark 1</strong> on a downbeat to anchor the bar — the accent will land on that exact moment. <strong>‹‹ / ››</strong> nudges the anchor by 25ms.
+                If clicks are off: tap <kbd className="px-1 py-px rounded bg-white/10 text-text-primary">T</kbd> 4+ times to fix BPM, then tap <kbd className="px-1 py-px rounded bg-white/10 text-text-primary">M</kbd> on a downbeat to anchor the bar — keyboard taps fire ~50ms faster than mouse clicks. <strong>‹‹ / ››</strong> nudges by 25ms.
               </p>
             </div>
 

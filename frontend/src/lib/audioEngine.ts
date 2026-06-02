@@ -49,6 +49,11 @@ class AudioEngine {
   private metronomeVolume = 0.6;
   private clickBufferAccent: AudioBuffer | null = null;
   private clickBufferRegular: AudioBuffer | null = null;
+  // Outstanding scheduled click sources, so we can yank any future-but-not-
+  // yet-played clicks when the anchor changes via Mark 1. Without this,
+  // the user has to wait out the WebAudio look-ahead window (~250ms) of
+  // pre-scheduled clicks before they hear the new phase.
+  private pendingClickSources: { src: AudioBufferSourceNode; when: number }[] = [];
 
   /** Optional callback invoked at end-of-song when playMode is continue or shuffle.
    *  Set by useAudioEngine hook which knows about the library + setlists. */
@@ -70,6 +75,14 @@ class AudioEngine {
 
   isReady(songId: string): boolean {
     return this.loadedSongId === songId;
+  }
+
+  /** Live song-time position (sec). Computed from the audio clock, not
+   *  from React state, so it's drift-free even between rAF frames. Use
+   *  this for time-critical UI (e.g. "Mark 1" needs the actual moment
+   *  of the user's tap, not the most recent rAF snapshot). */
+  getPosition(): number {
+    return this.currentPosition();
   }
 
   /** Expose raw AudioBuffers so the waveform component can render peaks. */
@@ -334,9 +347,15 @@ class AudioEngine {
 
     // Re-snap when the song moved past the next click (normal advance),
     // when BPM changed, or when the anchor moved (Mark 1 / Reset).
-    if (this.metronomeNextClickTime < this.ctx.currentTime - 0.05
-        || Math.abs(this.metronomeBpm - songBpm) > 0.1
-        || Math.abs(this.metronomeBeatOffset - beatAnchor) > 0.01) {
+    const bpmChanged = Math.abs(this.metronomeBpm - songBpm) > 0.1;
+    const anchorChanged = Math.abs(this.metronomeBeatOffset - beatAnchor) > 0.01;
+    const overdue = this.metronomeNextClickTime < this.ctx.currentTime - 0.05;
+    if (overdue || bpmChanged || anchorChanged) {
+      // When the user moved the anchor or BPM mid-playback, yank any
+      // already-queued clicks that are still in the WebAudio look-ahead
+      // window so they don't fire at the OLD phase before the new
+      // schedule takes effect. Without this, Mark 1 had a 50-250ms lag.
+      if (bpmChanged || anchorChanged) this.cancelPendingClicks();
       const songPos = this.currentPosition();
       this.metronomeBpm = songBpm;
       this.metronomeBeatOffset = beatAnchor;
@@ -371,11 +390,34 @@ class AudioEngine {
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
     src.connect(this.metronomeGain);
+    const playAt = Math.max(when, this.ctx.currentTime);
     try {
-      src.start(Math.max(when, this.ctx.currentTime));
+      src.start(playAt);
+      // Remember it so cancelPendingClicks() can yank future ones when
+      // the user re-anchors the bar with "Mark 1".
+      const entry = { src, when: playAt };
+      this.pendingClickSources.push(entry);
+      src.onended = () => {
+        const i = this.pendingClickSources.indexOf(entry);
+        if (i >= 0) this.pendingClickSources.splice(i, 1);
+      };
     } catch {
       // start() can throw if `when` is invalid — skip silently
     }
+  }
+
+  /** Stop any clicks that were scheduled but haven't played yet. Called
+   *  whenever the anchor / BPM changes so the user hears the new schedule
+   *  immediately instead of waiting out the WebAudio look-ahead. */
+  private cancelPendingClicks(): void {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    for (const entry of this.pendingClickSources) {
+      // If it's already started playing we can't unring the bell — leave it.
+      if (entry.when <= now) continue;
+      try { entry.src.stop(now); } catch { /* already finished */ }
+    }
+    // The onended handlers will clean up the array.
   }
 
   private startRaf(): void {
