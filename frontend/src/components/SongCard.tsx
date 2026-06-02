@@ -30,7 +30,7 @@ export function SongCard({ song }: { song: Song }) {
       whileHover={{ y: -4 }}
       whileTap={{ scale: 0.98 }}
       transition={{ type: 'spring', stiffness: 400, damping: 28 }}
-      className="group text-left card-elevated rounded-xl overflow-hidden hover:border-primary/40 hover:shadow-[0_12px_40px_-12px_var(--primary-glow)] focus-visible:border-primary/60 min-w-[220px]"
+      className="group text-left card-elevated rounded-xl overflow-hidden hover:border-primary/40 hover:shadow-[0_12px_40px_-12px_var(--primary-glow)] focus-visible:border-primary/60 w-full"
     >
       <div className="aspect-video relative bg-bg-elevated overflow-hidden">
         {!imgError ? (

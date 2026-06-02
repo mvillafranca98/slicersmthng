@@ -118,12 +118,20 @@ export function SetlistDetail() {
   // until the next pointerdown that isn't followed by a drag.
   const [suppressClick, setSuppressClick] = useState(false);
 
-  const playSong = (song: Song) => {
+  const playSong = (song: Song, index: number) => {
     if (suppressClick) {
       setSuppressClick(false);
       return;
     }
-    usePlayerStore.getState().setCurrentSong(song);
+    const ps = usePlayerStore.getState();
+    // Register the setlist context AS WELL as setting the song. Without
+    // this, the Next button in the player navigates by library order
+    // instead of setlist order, and the end-of-song auto-advance plays
+    // the wrong track. The order of calls also matters: setActiveSetlist
+    // first so the queueIndex is correct by the time autoplay fires.
+    if (setlist) ps.setActiveSetlist(setlist, index);
+    ps.setCurrentSong(song);
+    ps.setPlaying(true);
   };
 
   const availableToAdd = songs.filter(s => !entries.some(e => e.song_id === s.id));
@@ -174,7 +182,13 @@ export function SetlistDetail() {
             const showBottomBorder = isOver && dragIndex! < i;
 
             return (
-              <li key={entry.song_id}>
+              // Include the index in the key so duplicate song_ids in a
+              // setlist (same track added twice) don't collide. With a
+              // collision React fuses the two rows' DOM nodes and the click
+              // handler on row N actually fires row 0's closure (whose
+              // captured `song` is whichever was rendered first). That
+              // looked exactly like "clicking row N plays the wrong song."
+              <li key={`${entry.song_id}-${i}`}>
                 <div
                   draggable
                   onDragStart={(e) => {
@@ -187,7 +201,7 @@ export function SetlistDetail() {
                   onDragLeave={() => {
                     if (overIndex === i) setOverIndex(null);
                   }}
-                  onClick={() => song && playSong(song)}
+                  onClick={() => song && playSong(song, i)}
                   className={cn(
                     'card-elevated rounded-xl px-3 py-2.5 flex items-center gap-3 cursor-pointer transition-all',
                     'hover:border-primary/40 hover:shadow-[0_8px_28px_-12px_var(--primary-glow)]',
@@ -200,7 +214,7 @@ export function SetlistDetail() {
                   onKeyDown={(e) => {
                     if ((e.key === 'Enter' || e.key === ' ') && song) {
                       e.preventDefault();
-                      playSong(song);
+                      playSong(song, i);
                     }
                   }}
                 >
