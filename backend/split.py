@@ -52,8 +52,11 @@ def _r2_client_or_none():
 
 
 def _download_to_tmp(url: str, dest: Path) -> None:
-    with urllib.request.urlopen(url, timeout=120) as resp:
-        dest.write_bytes(resp.read())
+    """Same R2-aware fetcher used by backend.download — bypasses
+    Cloudflare's UA-based rate limiting when the URL is one of our
+    R2 objects, falls back to urllib + browser UA otherwise."""
+    from backend.download import _download_to  # reuse the smart fetcher
+    _download_to(url, dest)
 
 
 def _ffmpeg_extract_channel(src: Path, dst: Path, channel: str) -> None:
