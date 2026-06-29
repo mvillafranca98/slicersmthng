@@ -57,6 +57,26 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ source_stem: sourceStem, method }),
     }),
+  /** Download selected stems either merged into a single mp3 ('merge')
+   *  or zipped as separate mp3s ('zip'). Returns a Blob ready to be
+   *  saved via the FileSaver / anchor-download pattern. */
+  downloadStems: async (songId: string, stems: string[], mode: 'merge' | 'zip'): Promise<{ blob: Blob; filename: string }> => {
+    const res = await fetch(`${BASE}/songs/${songId}/download`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stems, mode }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error((err as { error?: string }).error || res.statusText);
+    }
+    // Parse Content-Disposition to pick up the server's suggested filename.
+    const cd = res.headers.get('content-disposition') || '';
+    const match = cd.match(/filename="?([^";]+)"?/i);
+    const filename = match ? match[1] : (mode === 'zip' ? 'stems.zip' : 'mix.mp3');
+    const blob = await res.blob();
+    return { blob, filename };
+  },
   saveSnapshot: (songId: string, snapshot: import('./types').MixSnapshot) =>
     request<{ ok: boolean }>(`/songs/${songId}/snapshots`, {
       method: 'POST',

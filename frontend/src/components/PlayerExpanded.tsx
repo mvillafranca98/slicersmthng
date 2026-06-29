@@ -4,6 +4,9 @@ import { toast } from 'sonner';
 import {
   ChevronDown,
   Check,
+  Download,
+  FileAudio,
+  Files,
   Loader2,
   Music2,
   Pause,
@@ -349,6 +352,65 @@ export function PlayerExpanded() {
     }
   };
 
+  // ---- Stem downloads ----
+  // Modal-controlled checklist of stems + mode picker (merged single mp3 vs
+  // zip of separate mp3s). On submit we POST /songs/:id/download which
+  // streams back the binary; we save it via an anchor + objectURL.
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const [downloadMode, setDownloadMode] = useState<'merge' | 'zip'>('zip');
+  const [downloadSelected, setDownloadSelected] = useState<Set<string>>(new Set());
+  const [downloading, setDownloading] = useState(false);
+
+  // Reset selection whenever the modal opens or the song changes — default
+  // to ALL stems checked so one click downloads everything.
+  useEffect(() => {
+    if (downloadOpen && currentSong) {
+      setDownloadSelected(new Set(currentSong.stems || []));
+    }
+  }, [downloadOpen, currentSong?.id, currentSong?.stems?.join(',')]);
+
+  const toggleDownloadStem = (name: string) => {
+    setDownloadSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const runDownload = async () => {
+    const stems = Array.from(downloadSelected);
+    if (!stems.length) {
+      toast.error('Pick at least one stem to download');
+      return;
+    }
+    setDownloading(true);
+    const t = toast.loading(
+      downloadMode === 'merge'
+        ? `Mixing ${stems.length} stem${stems.length === 1 ? '' : 's'} into one mp3…`
+        : `Bundling ${stems.length} stem${stems.length === 1 ? '' : 's'} into a zip…`
+    );
+    try {
+      const { blob, filename } = await api.downloadStems(currentSong.id, stems, downloadMode);
+      // Trigger save via a transient anchor — works cross-browser without libs.
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Defer revoke so Safari has time to start the download.
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      toast.success(`Saved ${filename}`, { id: t });
+      setDownloadOpen(false);
+    } catch (e) {
+      toast.error('Download failed', { id: t, description: (e as Error).message });
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   const resetTempo = async () => {
     setBpmOverride(null);
     // Restore to the auto-detected drum phase (or 0 for older slices).
@@ -510,9 +572,18 @@ export function PlayerExpanded() {
 
         <button
           type="button"
+          onClick={() => setDownloadOpen(true)}
+          aria-label="Download stems"
+          title="Download selected stems — merged into one mp3 or as separate files in a zip"
+          className="ml-2 h-9 w-9 grid place-items-center rounded-lg bg-white/[0.04] border border-white/5 text-text-secondary hover:text-primary hover:border-primary/40 transition-colors shrink-0"
+        >
+          <Download className="w-4 h-4" />
+        </button>
+        <button
+          type="button"
           onClick={() => setExpanded(false)}
           aria-label="Collapse player"
-          className="ml-2 h-9 w-9 grid place-items-center rounded-lg bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary transition-colors shrink-0"
+          className="ml-1 h-9 w-9 grid place-items-center rounded-lg bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary transition-colors shrink-0"
         >
           <ChevronDown className="w-4 h-4" />
         </button>
@@ -977,6 +1048,142 @@ export function PlayerExpanded() {
           </div>
         </section>
       </div>
+
+      {/* ----- Download modal ----- */}
+      {downloadOpen && (
+        <div
+          className="absolute inset-0 z-10 bg-black/70 backdrop-blur-sm grid place-items-center p-4"
+          onClick={() => !downloading && setDownloadOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl bg-bg-deep border border-white/10 shadow-2xl p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold text-text-primary">Download stems</h3>
+              <button
+                type="button"
+                onClick={() => !downloading && setDownloadOpen(false)}
+                aria-label="Close"
+                disabled={downloading}
+                className="h-7 w-7 grid place-items-center rounded text-text-muted hover:text-text-primary hover:bg-white/[0.04] disabled:opacity-30"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Stem checklist */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] uppercase tracking-[0.12em] text-text-muted">Stems</span>
+                <div className="flex gap-2 text-[10px] text-text-secondary">
+                  <button
+                    type="button"
+                    onClick={() => setDownloadSelected(new Set(currentSong.stems || []))}
+                    className="hover:text-text-primary"
+                  >
+                    select all
+                  </button>
+                  <span className="text-text-muted">·</span>
+                  <button
+                    type="button"
+                    onClick={() => setDownloadSelected(new Set())}
+                    className="hover:text-text-primary"
+                  >
+                    clear
+                  </button>
+                </div>
+              </div>
+              <div className="space-y-1 max-h-64 overflow-auto pr-1">
+                {(currentSong.stems || []).map((name) => {
+                  const color = STEM_COLORS[name] || '#8899AA';
+                  const checked = downloadSelected.has(name);
+                  return (
+                    <label
+                      key={name}
+                      className={cn(
+                        'flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors',
+                        checked
+                          ? 'bg-primary/10 border border-primary/30'
+                          : 'bg-white/[0.03] border border-white/5 hover:border-white/15',
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleDownloadStem(name)}
+                        className="accent-primary"
+                      />
+                      <span
+                        className="w-2 h-2 rounded-full"
+                        style={{ background: color }}
+                      />
+                      <span className="text-sm text-text-primary capitalize flex-1">{name.replace(/_/g, ' ')}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Mode picker */}
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted mb-2">Format</div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDownloadMode('zip')}
+                  className={cn(
+                    'flex flex-col items-start gap-1 p-3 rounded-lg border transition-colors text-left',
+                    downloadMode === 'zip'
+                      ? 'bg-primary/15 text-primary border-primary/40'
+                      : 'bg-white/[0.03] text-text-secondary border-white/5 hover:text-text-primary',
+                  )}
+                >
+                  <Files className="w-4 h-4" />
+                  <span className="text-xs font-semibold">Separate files</span>
+                  <span className="text-[10px] text-text-muted">zip of each stem as its own mp3</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDownloadMode('merge')}
+                  className={cn(
+                    'flex flex-col items-start gap-1 p-3 rounded-lg border transition-colors text-left',
+                    downloadMode === 'merge'
+                      ? 'bg-primary/15 text-primary border-primary/40'
+                      : 'bg-white/[0.03] text-text-secondary border-white/5 hover:text-text-primary',
+                  )}
+                >
+                  <FileAudio className="w-4 h-4" />
+                  <span className="text-xs font-semibold">Merged mp3</span>
+                  <span className="text-[10px] text-text-muted">one file with selected stems mixed</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Footer actions */}
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setDownloadOpen(false)}
+                disabled={downloading}
+                className="px-3 py-1.5 rounded-lg text-xs text-text-secondary hover:text-text-primary disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={runDownload}
+                disabled={downloading || downloadSelected.size === 0}
+                className="px-4 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 bg-primary text-bg-deepest hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {downloading
+                  ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Preparing…</>
+                  : <><Download className="w-3.5 h-3.5" /> Download {downloadSelected.size > 0 ? `(${downloadSelected.size})` : ''}</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }

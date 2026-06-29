@@ -724,6 +724,94 @@ def split_song_stem(song_id):
     threading.Thread(target=worker, daemon=True, name=f"split-{job_id[:8]}").start()
     return jsonify({"job_id": job_id})
 
+
+@api.route("/songs/<song_id>/download", methods=["POST"])
+def download_stems(song_id):
+    """Stream a download of the user-selected stems.
+
+    Payload:
+        { "stems": ["vocals", "drums", "bass"],
+          "mode":  "merge" | "zip" }
+
+    'merge' — ffmpeg-mixes the selected stems into one mp3 (great for
+              a backing track without vocals, or a drums+bass-only
+              practice track).
+    'zip'   — bundles each selected stem as its own mp3 inside a zip
+              (great for pulling parts into a DAW).
+
+    Synchronous: both modes finish in <30s for a ~6-stem 4-min song.
+    """
+    from backend.download import merge_stems_to_mp3, zip_stems
+    import tempfile
+    from flask import Response
+
+    payload = request.get_json() or {}
+    selected = payload.get("stems") or []
+    mode = (payload.get("mode") or "").strip()
+    if mode not in ("merge", "zip"):
+        return jsonify({"error": "mode must be 'merge' or 'zip'"}), 400
+    if not isinstance(selected, list) or not selected:
+        return jsonify({"error": "stems must be a non-empty list"}), 400
+
+    song_dir = get_song_dir(storage, song_id)
+    meta_path = song_dir / "song_meta.json"
+    if not meta_path.exists():
+        return jsonify({"error": "Song not found"}), 404
+    with open(meta_path) as f:
+        meta = json.load(f)
+
+    available = list(meta.get("stems") or [])
+    # Validate names BEFORE doing any work so a typo gives a fast 400.
+    # Filter to available stems while preserving the user's order.
+    sel = [s for s in selected if s in available]
+    if not sel:
+        return jsonify({"error": "none of the requested stems exist on this song"}), 400
+
+    # Resolve a (url, local_path) pair for each selected stem.
+    stem_urls = meta.get("stem_urls") or {}
+    sources: list = []
+    for s in sel:
+        url = (stem_urls.get(s) or "").strip()
+        local = None
+        if not url:
+            for ext in ("mp3", "wav", "flac"):
+                p = song_dir / "stems" / f"{s}.{ext}"
+                if p.exists():
+                    local = p
+                    break
+        sources.append((url, local))
+
+    title = meta.get("title") or song_id
+    safe_title = sanitize_filename(title).replace(" ", "_") or "song"
+
+    if mode == "merge":
+        out_path = Path(tempfile.mkstemp(suffix=".mp3")[1])
+        try:
+            merge_stems_to_mp3(sources, out_path)
+        except Exception as e:
+            return jsonify({"error": f"merge failed: {e}"}), 500
+        label = "_".join(sel) if len(sel) <= 4 else f"{'_'.join(sel[:3])}+{len(sel) - 3}more"
+        return send_file(
+            out_path, mimetype="audio/mpeg", as_attachment=True,
+            download_name=f"{safe_title}_{label}.mp3"[:200],
+        )
+
+    # mode == "zip"
+    names = [f"{safe_title}_{s}.mp3" for s in sel]
+    try:
+        zip_bytes = zip_stems(sources, names)
+    except Exception as e:
+        return jsonify({"error": f"zip failed: {e}"}), 500
+    return Response(
+        zip_bytes,
+        mimetype="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_title}_stems.zip"',
+            "Content-Length": str(len(zip_bytes)),
+        },
+    )
+
+
 @api.route("/songs/<song_id>/snapshots", methods=["GET"])
 def get_snapshots(song_id):
     snapshot = get_snapshot(song_id)
