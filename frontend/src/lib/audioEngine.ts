@@ -39,6 +39,17 @@ class AudioEngine {
   private pitchCents = 0;
   private loadedSongId: string | null = null;
   private rafId: number | null = null;
+  // Monotonic counter incremented at the top of every loadSong. Any
+  // in-flight load that finishes fetching/decoding after a NEWER load
+  // has started sees the sequence has moved and bails out silently.
+  // Without this, rapid song switching populated this.stems with BOTH
+  // songs' players and play() started them all → double audio.
+  private loadSequence = 0;
+  /** Publicly-readable "which song does the engine currently think it's
+   *  loaded" so the useAudioEngine callback can tell whether a stray
+   *  end-of-song event is talking about the ACTUAL current song or one
+   *  that was already superseded by a click. */
+  get currentLoadedSongId(): string | null { return this.loadedSongId; }
 
   // ---- Metronome (native Web Audio for low-latency clicks) ----
   private metronomeGain: GainNode | null = null;
@@ -93,14 +104,29 @@ class AudioEngine {
   }
 
   async loadSong(songId: string, stemNames: string[]): Promise<void> {
+    // Take a snapshot of the sequence at the top. Any subsequent load
+    // (fired by a rapid second click) will bump loadSequence past this
+    // value, and when our decode finishes we'll see the mismatch and
+    // abort before touching this.stems / this.loadedSongId.
+    const mySequence = ++this.loadSequence;
     this.stopPlayers();
     this.disposeStems();
     this.playbackOffset = 0;
     this.playing = false;
+    // Cancel any RAF frame that was queued for the previous song. Without
+    // this, a stray end-of-song check can fire in the ~16 ms between the
+    // click and useEffect calling loadSong, calling onRequestNext and
+    // overriding the song the user just clicked. (Setlist-plays-next bug.)
+    if (this.rafId != null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    // Provisionally clear loadedSongId so a stray onRequestNext can compare
+    // against the store's currentSong.id and skip the advance.
+    this.loadedSongId = null;
     usePlayerStore.getState().setCurrentTime(0);
 
     if (!stemNames.length) {
-      this.loadedSongId = null;
       usePlayerStore.getState().setDuration(0);
       return;
     }
@@ -118,6 +144,10 @@ class AudioEngine {
         return { name, audio };
       }),
     );
+
+    // Superseded by a newer loadSong while we were fetching? Drop the
+    // decoded buffers on the floor and let the newer load win.
+    if (mySequence !== this.loadSequence) return;
 
     for (const { name, audio } of decoded) {
       const tBuf = new Tone.ToneAudioBuffer(audio);

@@ -157,6 +157,15 @@ export function useAudioEngine() {
   useEffect(() => {
     audioEngine.onRequestNext = (mode) => {
       const ps = usePlayerStore.getState();
+      // Race guard: if the store's currentSong is already different from
+      // what the engine has loaded, a click has already moved us to a
+      // different song. Skip the auto-advance — otherwise a stray
+      // end-of-song RAF tick would override the user's click with the
+      // "next" song from the setlist they just activated.
+      if (audioEngine.currentLoadedSongId != null
+          && ps.currentSong?.id !== audioEngine.currentLoadedSongId) {
+        return;
+      }
       const songs = useLibraryStore.getState().songs;
       let next: Song | null = null;
       // 1. If a setlist is active, prefer setlist navigation
