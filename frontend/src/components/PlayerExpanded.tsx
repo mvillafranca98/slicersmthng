@@ -27,7 +27,7 @@ import {
   Timer,
   X,
 } from 'lucide-react';
-import { usePlayerStore } from '../stores/playerStore';
+import { usePlayerStore, resolveTempoSegments, activeSegmentIndex } from '../stores/playerStore';
 import { useLibraryStore } from '../stores/libraryStore';
 import { audioEngine } from '../lib/audioEngine';
 import { api } from '../api';
@@ -253,16 +253,19 @@ export function PlayerExpanded() {
     }, 3000);
   };
 
-  // Keyboard shortcut: T = tap tempo (skipped while typing in an input).
+  // Keyboard shortcuts: T = tap tempo, M = mark beat 1 on the active region
+  // (both skipped while typing in an input). Keyboard down fires with the
+  // lowest input latency, so M is the most accurate way to anchor by ear.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
       if (e.key === 't' || e.key === 'T') { e.preventDefault(); handleTap(); }
+      else if (e.key === 'm' || e.key === 'M') { e.preventDefault(); markBeatOne(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-    // handleTap closes over current values; recreate on song change
+    // handleTap / markBeatOne close over current values; recreate on song change
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSong?.id]);
 
@@ -451,6 +454,46 @@ export function PlayerExpanded() {
     // New region inherits the BPM of whichever region the playhead is in.
     const startBpm = bpmOverride ?? Math.round(bpm);
     addTempoSegment(currentTime, startBpm);
+  };
+
+  // ---- Mark 1 + nudge (operate on the ACTIVE tempo region) ----
+  // The active region is the one the playhead is in — base (index 0) edits
+  // beatOffsetSec, an added region edits its start. Reads fresh state via
+  // getState() so it composes correctly with the just-applied change.
+  const setActiveRegionStart = (start: number) => {
+    const st = usePlayerStore.getState();
+    const segs = resolveTempoSegments(st.bpmOverride, st.beatOffsetSec, st.tempoSegments, currentSong.bpm ?? 120);
+    const idx = activeSegmentIndex(segs, audioEngine.getPosition());
+    if (idx === 0) st.setBeatOffsetSec(start);
+    else st.updateTempoSegment(idx - 1, { start });
+  };
+  // Mark 1: anchor the active region's downbeat to the live playhead AND
+  // persist the whole tempo map immediately (works in or out of align mode).
+  const markBeatOne = async (e?: React.PointerEvent) => {
+    e?.preventDefault();
+    const pos = audioEngine.getPosition();
+    setActiveRegionStart(pos);
+    const st = usePlayerStore.getState();
+    const map = [{ start: st.beatOffsetSec, bpm: st.bpmOverride ?? Math.round(bpm) },
+      ...st.tempoSegments.map((s) => ({ start: s.start, bpm: s.bpm }))]
+      .sort((a, b) => a.start - b.start);
+    try {
+      await api.updateSongTempo(currentSong.id, {
+        bpm_user: map[0].bpm, beat_offset_user: map[0].start,
+        tempo_map: map.length > 1 ? map : null,
+      });
+      fetchSongs();
+      toast.success('Beat 1 anchored here');
+    } catch (err) {
+      toast.error('Saved locally — failed to persist', { description: (err as Error).message });
+    }
+  };
+  // ±25ms fine-tune of the active region (local only — Mark 1 or Save persists).
+  const nudgeAnchor = (deltaMs: number) => {
+    const st = usePlayerStore.getState();
+    const segs = resolveTempoSegments(st.bpmOverride, st.beatOffsetSec, st.tempoSegments, currentSong.bpm ?? 120);
+    const idx = activeSegmentIndex(segs, st.currentTime);
+    setActiveRegionStart(segs[idx].start + deltaMs / 1000);
   };
 
   // ---- Loop in bars ----
@@ -814,6 +857,27 @@ export function PlayerExpanded() {
                 >
                   Tap{tapCount > 0 ? ` ${tapCount}` : ''}
                 </button>
+                <span className="text-white/20 mx-1">|</span>
+                <button
+                  type="button"
+                  onPointerDown={markBeatOne}
+                  title="Mark 1 (or press M) — anchor the active region's downbeat to the playhead"
+                  className="h-7 px-2 rounded text-[10px] font-mono bg-primary/15 text-primary border border-primary/30 hover:bg-primary/25 active:bg-primary/30"
+                >
+                  Mark 1
+                </button>
+                <button
+                  type="button"
+                  onClick={() => nudgeAnchor(-25)}
+                  title="Nudge the active region's downbeat 25ms earlier"
+                  className="h-7 w-7 grid place-items-center rounded text-[10px] font-mono bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary"
+                >‹‹</button>
+                <button
+                  type="button"
+                  onClick={() => nudgeAnchor(25)}
+                  title="Nudge the active region's downbeat 25ms later"
+                  className="h-7 w-7 grid place-items-center rounded text-[10px] font-mono bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary"
+                >››</button>
                 {tempoSegments.length > 0 && (
                   <span className="text-[10px] font-mono text-primary tabular-nums">
                     {tempoSegments.length + 1} tempos
@@ -821,7 +885,7 @@ export function PlayerExpanded() {
                 )}
               </div>
               <p className="mt-1 text-[10px] text-text-muted">
-                Set the BPM (type it, or tap <kbd className="px-1 py-px rounded bg-white/10 text-text-primary">T</kbd> 4+ times), then use <strong>Align</strong> below to drag the grid onto the beats.
+                Set the BPM (type it, or <kbd className="px-1 py-px rounded bg-white/10 text-text-primary">T</kbd> 4+ times). Anchor beat 1 with <strong>Mark 1</strong> / <kbd className="px-1 py-px rounded bg-white/10 text-text-primary">M</kbd>, fine-tune with <strong>‹‹ / ››</strong>, or use <strong>Align</strong> below to drag the grid (with zoom) onto the beats.
               </p>
 
               {/* Visual align mode — drag the grid onto the waveform */}

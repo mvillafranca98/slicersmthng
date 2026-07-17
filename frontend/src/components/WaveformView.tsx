@@ -76,6 +76,21 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
   // of the region being dragged (0 = base tempo).
   const dragRef = useRef<{ startX: number; startVal: number; segIndex: number; moved: boolean } | null>(null);
 
+  // Zoom for precise alignment. zoom=1 shows the whole song; higher zoom
+  // shows a `duration/zoom`-second window centered on viewCenter. All
+  // time↔pixel mapping goes through the view window below so waveform,
+  // grid, playhead, loop and drag all agree.
+  const [zoom, setZoom] = useState(1);
+  const [viewCenter, setViewCenter] = useState(0);
+  const span = zoom <= 1 || !duration ? (duration || 1) : duration / zoom;
+  const maxStart = Math.max(0, (duration || 0) - span);
+  const viewStart = duration ? Math.min(maxStart, Math.max(0, viewCenter - span / 2)) : 0;
+  const timeToX = (t: number) => ((t - viewStart) / span) * width;
+  const xToTime = (x: number) => viewStart + (x / (width || 1)) * span;
+
+  // Reset zoom when the song changes.
+  useEffect(() => { setZoom(1); setViewCenter(0); }, [currentSong?.id]);
+
   // Resize observer keeps the canvases sized to their container
   useEffect(() => {
     const el = containerRef.current;
@@ -105,7 +120,10 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
         return;
       }
       buffers.forEach((buf, name) => {
-        peaksRef.current.set(name, computePeaks(buf, 2400));
+        // Higher bucket count so the waveform stays sharp when zoomed in
+        // for metronome alignment (a slice of these buckets is stretched
+        // across the full width at high zoom).
+        peaksRef.current.set(name, computePeaks(buf, 6000));
       });
       setPeaksReady(true);
     };
@@ -153,7 +171,12 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
 
       const peakCount = peaks.min.length;
       for (let x = 0; x < width; x++) {
-        const i = Math.floor((x / width) * peakCount);
+        // Map each pixel to a song-time via the view window, then to a peak
+        // bucket. At zoom=1 this is the whole song; when zoomed, only the
+        // visible slice of buckets is stretched across the width.
+        const t = duration ? viewStart + (x / width) * span : 0;
+        const i = Math.floor((t / (duration || 1)) * peakCount);
+        if (i < 0 || i >= peakCount) continue;
         const minV = peaks.min[i] || 0;
         const maxV = peaks.max[i] || 0;
         const y1 = centerY - maxV * halfH;
@@ -186,7 +209,8 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
         for (let n = firstN; n <= lastN; n++) {
           const t = seg.start + n * secondsPerBeat;
           if (t < 0 || t > duration) continue;
-          const x = (t / duration) * width;
+          const x = timeToX(t);
+          if (x < -4 || x > width + 4) continue;  // outside the zoom window
           const isBar = (((n % 4) + 4) % 4) === 0;
           if (alignMode) {
             const base = isActive ? 1 : 0.4;
@@ -204,18 +228,20 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
         }
         // Region boundary marker (cyan flag) for added regions.
         if (si > 0) {
-          const bx = (seg.start / duration) * width;
-          ctx.fillStyle = 'rgba(0,229,255,0.9)';
-          ctx.fillRect(Math.round(bx), 0, 2, height);
-          ctx.fillRect(Math.round(bx), 0, 10, 5);
+          const bx = timeToX(seg.start);
+          if (bx >= -4 && bx <= width + 4) {
+            ctx.fillStyle = 'rgba(0,229,255,0.9)';
+            ctx.fillRect(Math.round(bx), 0, 2, height);
+            ctx.fillRect(Math.round(bx), 0, 10, 5);
+          }
         }
       }
     }
 
     // Loop region tint + borders
     if (loopA != null && loopB != null && duration > 0 && loopB > loopA) {
-      const x1 = (loopA / duration) * width;
-      const x2 = (loopB / duration) * width;
+      const x1 = timeToX(loopA);
+      const x2 = timeToX(loopB);
       ctx.fillStyle = loopActive ? 'rgba(255,169,77,0.18)' : 'rgba(255,169,77,0.08)';
       ctx.fillRect(x1, 0, x2 - x1, height);
       ctx.strokeStyle = loopActive ? 'rgba(255,169,77,0.7)' : 'rgba(255,169,77,0.35)';
@@ -225,7 +251,7 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
       ctx.moveTo(x2 - 0.5, 0); ctx.lineTo(x2 - 0.5, height);
       ctx.stroke();
     }
-  }, [peaksReady, width, height, stems, loopA, loopB, loopActive, currentSong?.bpm, currentSong?.id, duration, alignMode, bpmOverride, beatOffsetSec, tempoSegments, currentTime]);
+  }, [peaksReady, width, height, stems, loopA, loopB, loopActive, currentSong?.bpm, currentSong?.id, duration, alignMode, bpmOverride, beatOffsetSec, tempoSegments, currentTime, zoom, viewCenter]);
 
   // Dynamic layer: just the playhead cursor
   useEffect(() => {
@@ -242,26 +268,36 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    const x = (currentTime / duration) * width;
-    // Soft glow + crisp line
-    ctx.strokeStyle = 'rgba(0,229,255,0.35)';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(x, 0); ctx.lineTo(x, height);
-    ctx.stroke();
-    ctx.strokeStyle = 'rgba(0,229,255,0.95)';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(x, 0); ctx.lineTo(x, height);
-    ctx.stroke();
-  }, [currentTime, width, height, duration]);
+    const x = timeToX(currentTime);
+    if (x >= 0 && x <= width) {
+      // Soft glow + crisp line
+      ctx.strokeStyle = 'rgba(0,229,255,0.35)';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(x, 0); ctx.lineTo(x, height);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(0,229,255,0.95)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x, 0); ctx.lineTo(x, height);
+      ctx.stroke();
+    }
+  }, [currentTime, width, height, duration, zoom, viewCenter]);
+
+  // Auto-follow: when zoomed and playing (and not mid-drag), keep the
+  // playhead in view by recentering once it drifts out of the middle 80%.
+  // Discrete recenters (not every frame) keep the heavy static redraw rare.
+  useEffect(() => {
+    if (zoom <= 1 || !duration || dragRef.current) return;
+    const rel = (currentTime - viewStart) / span;  // 0..1 within the window
+    if (rel < 0.1 || rel > 0.9) setViewCenter(currentTime);
+  }, [currentTime, zoom, duration, viewStart, span]);
 
   const onSeek = (e: React.MouseEvent) => {
     if (!duration) return;
     const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const t = (x / rect.width) * duration;
-    audioEngine.seek(t);
+    audioEngine.seek(xToTime(x));
   };
 
   // ---- Align-mode drag: slide the active region's grid to line it up ----
@@ -290,7 +326,9 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const dx = e.clientX - drag.startX;
     if (Math.abs(dx) > 2) drag.moved = true;
-    const dt = (dx / rect.width) * duration;
+    // dt uses the VISIBLE span, not the full duration — so at higher zoom
+    // the same pixel drag moves the grid by a smaller time delta (finer).
+    const dt = (dx / rect.width) * span;
     const newStart = drag.startVal + dt;
     const st = usePlayerStore.getState();
     if (drag.segIndex === 0) {
@@ -311,9 +349,13 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
 
   if (!currentSong) return null;
 
-  // Compute A/B label positions for the overlay chips
-  const aPct = loopA != null && duration > 0 ? (loopA / duration) * 100 : null;
-  const bPct = loopB != null && duration > 0 ? (loopB / duration) * 100 : null;
+  // A/B chip positions in the current view window (pixels → %).
+  const aX = loopA != null && duration > 0 ? timeToX(loopA) : null;
+  const bX = loopB != null && duration > 0 ? timeToX(loopB) : null;
+  const inView = (x: number | null) => x != null && x >= 0 && x <= width;
+
+  const zoomIn = () => { setViewCenter(currentTime); setZoom((z) => Math.min(32, z * 2)); };
+  const zoomOut = () => { setViewCenter(currentTime); setZoom((z) => Math.max(1, z / 2)); };
 
   return (
     <div
@@ -332,16 +374,42 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
           ← drag to align the beat grid →
         </div>
       )}
-      {aPct != null && (
+
+      {/* Zoom controls — shown in align mode for precise dragging. */}
+      {alignMode && (
+        <div className="absolute bottom-1 right-1 flex items-center gap-1">
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); zoomOut(); }}
+            disabled={zoom <= 1}
+            aria-label="Zoom out"
+            className="h-6 w-6 grid place-items-center rounded bg-bg-deepest/80 border border-white/10 text-text-secondary hover:text-text-primary disabled:opacity-30 text-sm leading-none"
+          >−</button>
+          <span className="px-1.5 h-6 grid place-items-center rounded bg-bg-deepest/80 border border-white/10 text-[10px] font-mono text-text-primary tabular-nums">
+            {zoom}×
+          </span>
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); zoomIn(); }}
+            disabled={zoom >= 32}
+            aria-label="Zoom in"
+            className="h-6 w-6 grid place-items-center rounded bg-bg-deepest/80 border border-white/10 text-text-secondary hover:text-text-primary disabled:opacity-30 text-sm leading-none"
+          >+</button>
+        </div>
+      )}
+
+      {inView(aX) && (
         <div
           className="absolute -top-0.5 px-1 text-[9px] font-mono font-bold text-bg-deepest bg-primary rounded-sm pointer-events-none"
-          style={{ left: `${aPct}%`, transform: 'translateX(-50%)' }}
+          style={{ left: `${aX}px`, transform: 'translateX(-50%)' }}
         >A</div>
       )}
-      {bPct != null && (
+      {inView(bX) && (
         <div
           className="absolute -top-0.5 px-1 text-[9px] font-mono font-bold text-bg-deepest bg-primary rounded-sm pointer-events-none"
-          style={{ left: `${bPct}%`, transform: 'translateX(-50%)' }}
+          style={{ left: `${bX}px`, transform: 'translateX(-50%)' }}
         >B</div>
       )}
       {!peaksReady && (
