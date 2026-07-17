@@ -66,6 +66,13 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
   const loopA = usePlayerStore((s) => s.loopA);
   const loopB = usePlayerStore((s) => s.loopB);
   const loopActive = usePlayerStore((s) => s.loopActive);
+  const alignMode = usePlayerStore((s) => s.alignMode);
+  const bpmOverride = usePlayerStore((s) => s.bpmOverride);
+  const beatOffsetSec = usePlayerStore((s) => s.beatOffsetSec);
+
+  // Drag state for align-mode grid nudging. Refs (not state) so the pointer
+  // handlers don't re-render mid-drag.
+  const dragRef = useRef<{ startX: number; startAnchor: number; moved: boolean } | null>(null);
 
   // Resize observer keeps the canvases sized to their container
   useEffect(() => {
@@ -130,13 +137,16 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
       if (!peaks) continue;
       const st = state.stems[name];
       const color = STEM_COLORS[name] || '#8899AA';
-      // Opacity: faded when muted, OR when something else is soloed
+      // Opacity: faded when muted, OR when something else is soloed.
+      // In align mode ALL stems drop to a uniform grey so the metronome
+      // grid is the only colored thing on screen.
       let opacity = 0.55;
-      if (st?.muted) opacity = 0.08;
+      if (alignMode) opacity = 0.14;
+      else if (st?.muted) opacity = 0.08;
       else if (anySolo && !st?.solo) opacity = 0.08;
       else if (st?.solo) opacity = 0.85;
 
-      ctx.fillStyle = color;
+      ctx.fillStyle = alignMode ? '#8899AA' : color;
       ctx.globalAlpha = opacity;
 
       const peakCount = peaks.min.length;
@@ -151,16 +161,38 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
     }
     ctx.globalAlpha = 1;
 
-    // Beat grid (every 4th = bar, brighter)
+    // Beat grid. Uses the SAME anchor + BPM the audio engine's metronome
+    // uses (bpmOverride ?? song.bpm, plus the beatOffsetSec anchor), so the
+    // lines you see are exactly where the clicks land. Accent every 4th
+    // beat (bar 1). In align mode the grid is bright + amber and the accents
+    // get a taller cap so it's easy to line up by eye; otherwise it's faint.
     if (currentSong && duration > 0) {
-      const bpm = Math.max(40, Math.min(240, currentSong.bpm || 120));
+      const bpm = Math.max(30, Math.min(300, bpmOverride ?? currentSong.bpm ?? 120));
       const secondsPerBeat = 60 / bpm;
-      const beats = Math.min(2000, Math.floor(duration / secondsPerBeat));
-      for (let i = 1; i <= beats; i++) {
-        const x = (i * secondsPerBeat / duration) * width;
-        const isBar = i % 4 === 0;
-        ctx.fillStyle = isBar ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.04)';
-        ctx.fillRect(Math.round(x), 0, 1, height);
+      const anchor = beatOffsetSec || 0;
+      // Enumerate beats within [0, duration]: t = anchor + N*period.
+      const firstN = Math.ceil((0 - anchor) / secondsPerBeat);
+      const lastN = Math.floor((duration - anchor) / secondsPerBeat);
+      const totalBeats = lastN - firstN;
+      if (totalBeats <= 3000) {  // guard against absurd BPM/duration combos
+        for (let n = firstN; n <= lastN; n++) {
+          const t = anchor + n * secondsPerBeat;
+          const x = (t / duration) * width;
+          const isBar = (((n % 4) + 4) % 4) === 0;
+          if (alignMode) {
+            ctx.fillStyle = isBar ? 'rgba(255,169,77,0.95)' : 'rgba(255,169,77,0.45)';
+            ctx.fillRect(Math.round(x), 0, isBar ? 2 : 1, height);
+            // Downbeat cap so bars are unmistakable while dragging.
+            if (isBar) {
+              ctx.fillStyle = 'rgba(255,169,77,1)';
+              ctx.fillRect(Math.round(x) - 2, 0, 5, 5);
+              ctx.fillRect(Math.round(x) - 2, height - 5, 5, 5);
+            }
+          } else {
+            ctx.fillStyle = isBar ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.04)';
+            ctx.fillRect(Math.round(x), 0, 1, height);
+          }
+        }
       }
     }
 
@@ -177,7 +209,7 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
       ctx.moveTo(x2 - 0.5, 0); ctx.lineTo(x2 - 0.5, height);
       ctx.stroke();
     }
-  }, [peaksReady, width, height, stems, loopA, loopB, loopActive, currentSong?.bpm, currentSong?.id, duration]);
+  }, [peaksReady, width, height, stems, loopA, loopB, loopActive, currentSong?.bpm, currentSong?.id, duration, alignMode, bpmOverride, beatOffsetSec]);
 
   // Dynamic layer: just the playhead cursor
   useEffect(() => {
@@ -216,6 +248,36 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
     audioEngine.seek(t);
   };
 
+  // ---- Align-mode drag: slide the whole beat grid to line it up ----
+  // A horizontal drag shifts beatOffsetSec by the drag's time-equivalent
+  // (dx / width * duration). A click that doesn't move still seeks, so the
+  // user can jump around the song to check alignment at different points.
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (!alignMode || !duration) return;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    dragRef.current = {
+      startX: e.clientX,
+      startAnchor: usePlayerStore.getState().beatOffsetSec || 0,
+      moved: false,
+    };
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const drag = dragRef.current;
+    if (!drag || !alignMode || !duration) return;
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const dx = e.clientX - drag.startX;
+    if (Math.abs(dx) > 2) drag.moved = true;
+    const dt = (dx / rect.width) * duration;
+    usePlayerStore.getState().setBeatOffsetSec(drag.startAnchor + dt);
+  };
+  const onPointerUp = (e: React.PointerEvent) => {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    if (!alignMode || !duration) return;
+    // A pure click (no drag) seeks so the user can reposition the playhead.
+    if (drag && !drag.moved) onSeek(e as unknown as React.MouseEvent);
+  };
+
   if (!currentSong) return null;
 
   // Compute A/B label positions for the overlay chips
@@ -225,12 +287,20 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
   return (
     <div
       ref={containerRef}
-      className="relative w-full cursor-pointer select-none"
+      className={`relative w-full select-none ${alignMode ? 'cursor-ew-resize ring-1 ring-primary/50 rounded-md' : 'cursor-pointer'}`}
       style={{ height }}
-      onClick={onSeek}
+      onClick={alignMode ? undefined : onSeek}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
     >
       <canvas ref={staticCanvasRef} className="absolute inset-0" />
       <canvas ref={dynamicCanvasRef} className="absolute inset-0 pointer-events-none" />
+      {alignMode && (
+        <div className="absolute top-1 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-primary text-bg-deepest pointer-events-none shadow">
+          ← drag to align the beat grid →
+        </div>
+      )}
       {aPct != null && (
         <div
           className="absolute -top-0.5 px-1 text-[9px] font-mono font-bold text-bg-deepest bg-primary rounded-sm pointer-events-none"

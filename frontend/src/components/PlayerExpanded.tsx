@@ -95,6 +95,8 @@ export function PlayerExpanded() {
     setBpmOverride,
     beatOffsetSec,
     setBeatOffsetSec,
+    alignMode,
+    setAlignMode,
     playMode,
     setPlayMode,
   } = usePlayerStore();
@@ -419,6 +421,37 @@ export function PlayerExpanded() {
       await api.updateSongTempo(currentSong.id, { bpm_user: null, beat_offset_user: null });
       fetchSongs();
     } catch { /* still reset locally even if persist fails */ }
+  };
+
+  // ---- Visual align mode ----
+  // Entering align mode turns on the metronome (so the user hears the grid
+  // they're dragging) and starts playback if paused. The waveform then
+  // greys its stems and shows the draggable grid.
+  const enterAlignMode = () => {
+    setMetronomeEnabled(true);
+    setAlignMode(true);
+    if (!isPlaying) setPlaying(true);
+  };
+  const saveAlign = async () => {
+    setAlignMode(false);
+    try {
+      await api.updateSongTempo(currentSong.id, {
+        bpm_user: bpmOverride ?? Math.round(bpm),
+        beat_offset_user: beatOffsetSec,
+      });
+      fetchSongs();
+      toast.success('Metronome alignment saved for this song', {
+        description: 'It will load automatically next time.',
+      });
+    } catch (e) {
+      toast.error('Saved locally — failed to persist', { description: (e as Error).message });
+    }
+  };
+  const cancelAlign = () => {
+    setAlignMode(false);
+    // Revert to whatever was persisted (or auto-detected) for this song.
+    setBpmOverride(currentSong.bpm_user ?? null);
+    setBeatOffsetSec(currentSong.beat_offset_user ?? currentSong.beat_offset ?? 0);
   };
 
   // ---- Loop in bars ----
@@ -811,6 +844,43 @@ export function PlayerExpanded() {
               <p className="mt-1 text-[10px] text-text-muted">
                 If clicks are off: tap <kbd className="px-1 py-px rounded bg-white/10 text-text-primary">T</kbd> 4+ times to fix BPM, then tap <kbd className="px-1 py-px rounded bg-white/10 text-text-primary">M</kbd> on a downbeat to anchor the bar — keyboard taps fire ~50ms faster than mouse clicks. <strong>‹‹ / ››</strong> nudges by 25ms.
               </p>
+
+              {/* Visual align mode — drag the grid onto the waveform */}
+              <div className="mt-3 pt-3 border-t border-white/5">
+                {!alignMode ? (
+                  <button
+                    type="button"
+                    onClick={enterAlignMode}
+                    className="w-full h-9 inline-flex items-center justify-center gap-2 rounded-lg text-xs font-semibold bg-primary/15 text-primary border border-primary/30 hover:bg-primary/25 transition-colors"
+                  >
+                    <Magnet className="w-3.5 h-3.5" />
+                    Align metronome to waveform
+                  </button>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-[10px] text-primary">
+                      Align mode on — set the BPM above, then <strong>drag the amber grid</strong> on the waveform until the bar lines sit on the beats. Click (no drag) to jump around and check.
+                    </p>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={saveAlign}
+                        className="flex-1 h-9 inline-flex items-center justify-center gap-1.5 rounded-lg text-xs font-semibold bg-primary text-bg-deepest hover:bg-primary-hover transition-colors"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        Save alignment
+                      </button>
+                      <button
+                        type="button"
+                        onClick={cancelAlign}
+                        className="h-9 px-3 inline-flex items-center justify-center gap-1.5 rounded-lg text-xs font-medium bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Pitch shift (independent of tempo) */}

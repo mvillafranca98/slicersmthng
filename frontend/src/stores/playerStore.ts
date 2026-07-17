@@ -28,6 +28,11 @@ interface PlayerState {
   // accent landing every 4 beats from N=0. Set by the "Mark 1" button to
   // the current playback time, persisted per-song as beat_offset_user.
   beatOffsetSec: number;
+  // When true, the waveform enters "align mode": stems grey out and the
+  // metronome grid becomes a bright, draggable overlay so the user can
+  // slide it onto the song's beats by eye. Not persisted — it's a
+  // transient editing state, reset on song change.
+  alignMode: boolean;
   playMode: 'stop' | 'continue' | 'repeat' | 'shuffle'; // end-of-song behaviour
   expanded: boolean;
   activeSetlist: Setlist | null;
@@ -48,6 +53,7 @@ interface PlayerState {
   setMetronomeCountIn: (v: boolean) => void;
   setBpmOverride: (v: number | null) => void;
   setBeatOffsetSec: (v: number) => void;
+  setAlignMode: (v: boolean) => void;
   setPlayMode: (m: 'stop' | 'continue' | 'repeat' | 'shuffle') => void;
   setExpanded: (v: boolean) => void;
   setActiveSetlist: (s: Setlist | null, index?: number) => void;
@@ -85,6 +91,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   })(),
   bpmOverride: null,
   beatOffsetSec: 0,
+  alignMode: false,
   playMode: (() => {
     try {
       if (typeof window === 'undefined') return 'continue' as const;
@@ -119,6 +126,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         currentTime: 0,
         bpmOverride,
         beatOffsetSec: beatOffset,
+        alignMode: false,  // never carry the align editor across songs
       };
     });
   },
@@ -153,6 +161,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   // anywhere in (or before) the track. Negative values are valid pre-roll
   // anchors that get the grid math right for songs that start mid-bar.
   setBeatOffsetSec: (v) => set({ beatOffsetSec: Number.isFinite(v) ? v : 0 }),
+  setAlignMode: (v) => set({ alignMode: v }),
   setPlayMode: (m) => {
     if (typeof window !== 'undefined') localStorage.setItem('slcr.playMode', m);
     set({ playMode: m });
