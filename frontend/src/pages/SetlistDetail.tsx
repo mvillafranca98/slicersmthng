@@ -16,6 +16,18 @@ function formatDuration(seconds: number) {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+/** Human-friendly long-form duration for setlist totals — e.g.
+ *  "3 min", "47 min", "1h 12m", "2h 05m". Keeps the label readable at
+ *  a glance instead of showing "72:34" for an hour-plus setlist. */
+function formatLongDuration(seconds: number): string {
+  if (!isFinite(seconds) || seconds <= 0) return '0 min';
+  const totalMinutes = Math.round(seconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes} min`;
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return `${h}h ${m.toString().padStart(2, '0')}m`;
+}
+
 export function SetlistDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -44,6 +56,14 @@ export function SetlistDetail() {
   }, [setlist, dragIndex]);
 
   const songMap = useMemo(() => new Map(songs.map(s => [s.id, s])), [songs]);
+
+  // Sum every resolvable entry's duration for the header. Entries whose
+  // song hasn't loaded from the library yet (or was removed) contribute 0
+  // so the total quietly recovers as songMap fills in.
+  const totalDurationSec = useMemo(
+    () => entries.reduce((sum, e) => sum + (songMap.get(e.song_id)?.duration || 0), 0),
+    [entries, songMap],
+  );
 
   if (!setlist) {
     return (
@@ -157,6 +177,11 @@ export function SetlistDetail() {
         <span className="text-sm text-text-muted">
           {entries.length} {entries.length === 1 ? 'song' : 'songs'}
         </span>
+        {totalDurationSec > 0 && (
+          <span className="text-sm text-text-muted">
+            · {formatLongDuration(totalDurationSec)}
+          </span>
+        )}
         <button
           type="button"
           onClick={() => deleteSetlist(setlist.id).then(() => navigate('/setlists'))}

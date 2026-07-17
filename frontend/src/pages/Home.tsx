@@ -85,20 +85,37 @@ export function Home() {
           <EmptySetlists />
         ) : (
           <div className="flex flex-wrap gap-3">
-            {setlists.map(sl => (
-              <Link
-                key={sl.id}
-                to={`/setlists/${sl.id}`}
-                className="card-elevated rounded-xl px-4 py-3 hover:border-primary/40 transition-colors"
-                style={{ borderLeftColor: sl.color, borderLeftWidth: 3 }}
-              >
-                <div className="flex items-center gap-2">
-                  <ListMusic className="w-4 h-4 text-text-secondary" />
-                  <span className="font-medium text-sm text-text-primary">{sl.name}</span>
-                  <span className="text-text-muted text-xs">{(sl.songs || []).length} songs</span>
-                </div>
-              </Link>
-            ))}
+            {setlists.map(sl => {
+              // Aggregate duration across the setlist's entries by looking
+              // each song up in the library — same pattern as SetlistDetail.
+              const totalSec = (sl.songs || []).reduce((sum, e) => {
+                const s = songs.find(x => x.id === e.song_id);
+                return sum + (s?.duration || 0);
+              }, 0);
+              const totalMinutes = Math.round(totalSec / 60);
+              const totalLabel = totalSec > 0
+                ? (totalMinutes < 60
+                    ? `${totalMinutes} min`
+                    : `${Math.floor(totalMinutes / 60)}h ${(totalMinutes % 60).toString().padStart(2, '0')}m`)
+                : null;
+              return (
+                <Link
+                  key={sl.id}
+                  to={`/setlists/${sl.id}`}
+                  className="card-elevated rounded-xl px-4 py-3 hover:border-primary/40 transition-colors"
+                  style={{ borderLeftColor: sl.color, borderLeftWidth: 3 }}
+                >
+                  <div className="flex items-center gap-2">
+                    <ListMusic className="w-4 h-4 text-text-secondary" />
+                    <span className="font-medium text-sm text-text-primary">{sl.name}</span>
+                    <span className="text-text-muted text-xs">{(sl.songs || []).length} songs</span>
+                    {totalLabel && (
+                      <span className="text-text-muted text-xs">· {totalLabel}</span>
+                    )}
+                  </div>
+                </Link>
+              );
+            })}
           </div>
         )}
       </section>
