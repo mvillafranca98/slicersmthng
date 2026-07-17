@@ -17,7 +17,7 @@
  * are pre-synthesized into AudioBuffers and scheduled with a buffer source.
  */
 import * as Tone from 'tone';
-import { usePlayerStore } from '../stores/playerStore';
+import { usePlayerStore, resolveTempoSegments, activeSegmentIndex } from '../stores/playerStore';
 
 interface StemNode {
   buffer: AudioBuffer;        // raw AudioBuffer — kept for waveform visualization
@@ -363,47 +363,61 @@ class AudioEngine {
     if (!state.metronomeEnabled || !this.playing || !this.ctx) return;
     this.ensureMetronomeGain();
 
-    // Effective tempo: user override wins over the auto-detected BPM.
-    const songBpm = Math.max(
-      30,
-      Math.min(300, state.bpmOverride ?? state.currentSong?.bpm ?? 120),
+    // Resolve the tempo map: base tempo + any added regions. For a
+    // single-tempo song this is just one segment (the base), so behaviour
+    // is identical to before. For multi-tempo songs, we look up which
+    // region the playhead is currently in and use its bpm + start-as-anchor.
+    const segments = resolveTempoSegments(
+      state.bpmOverride,
+      state.beatOffsetSec,
+      state.tempoSegments,
+      state.currentSong?.bpm ?? 120,
     );
-    // beatOffsetSec is the ABSOLUTE song-time of beat 0. The click grid is
-    // { anchor + N*period | N integer } with the accent on N % 4 === 0,
-    // so the click at the anchor itself is always the bar-1-beat-1 accent.
-    // This is what "Mark 1" relies on — it sets the anchor to currentTime
-    // and the very next click thereafter is the accent at that moment.
-    const beatAnchor = state.beatOffsetSec || 0;
+    const songPosNow = this.currentPosition();
+    const segIdx = activeSegmentIndex(segments, songPosNow);
+    const seg = segments[segIdx];
+    // Where this region ends (next region's start), in song-time. The
+    // metronome stops emitting clicks at/after this point and the next
+    // tick picks up the following region — that's how the click grid
+    // switches tempo at a boundary.
+    const nextStart = segIdx + 1 < segments.length ? segments[segIdx + 1].start : Infinity;
+
+    const songBpm = seg.bpm;               // already clamped in resolver
+    const beatAnchor = seg.start;
 
     // Re-snap when the song moved past the next click (normal advance),
-    // when BPM changed, or when the anchor moved (Mark 1 / Reset).
+    // when BPM changed, or when the active region's anchor moved (drag /
+    // region switch). The anchor/bpm change also covers crossing a boundary
+    // into a new region, since that region has a different start/bpm.
     const bpmChanged = Math.abs(this.metronomeBpm - songBpm) > 0.1;
     const anchorChanged = Math.abs(this.metronomeBeatOffset - beatAnchor) > 0.01;
     const overdue = this.metronomeNextClickTime < this.ctx.currentTime - 0.05;
     if (overdue || bpmChanged || anchorChanged) {
-      // When the user moved the anchor or BPM mid-playback, yank any
-      // already-queued clicks that are still in the WebAudio look-ahead
-      // window so they don't fire at the OLD phase before the new
-      // schedule takes effect. Without this, Mark 1 had a 50-250ms lag.
+      // Yank already-queued clicks still in the WebAudio look-ahead window
+      // so a drag / tempo change takes effect within ~10ms instead of
+      // waiting out the ~250ms schedule horizon.
       if (bpmChanged || anchorChanged) this.cancelPendingClicks();
-      const songPos = this.currentPosition();
       this.metronomeBpm = songBpm;
       this.metronomeBeatOffset = beatAnchor;
       const secondsPerBeatInSong = 60 / songBpm;
-      // Smallest integer N such that anchor + N*period >= songPos.
-      // Allows negative N when songPos is before the anchor (pre-anchor
-      // bars still get clicks, accent still lands on N%4==0).
-      this.metronomeBeatIndex = Math.ceil((songPos - beatAnchor) / secondsPerBeatInSong);
+      // Smallest integer N such that anchor + N*period >= songPos. Allows
+      // negative N when songPos precedes the anchor (only for the base
+      // region — added regions start at their anchor).
+      this.metronomeBeatIndex = Math.ceil((songPosNow - beatAnchor) / secondsPerBeatInSong);
       const beatPosInSong = beatAnchor + this.metronomeBeatIndex * secondsPerBeatInSong;
-      this.metronomeNextClickTime = this.ctx.currentTime + (beatPosInSong - songPos) / this.tempo;
+      this.metronomeNextClickTime = this.ctx.currentTime + (beatPosInSong - songPosNow) / this.tempo;
     }
 
-    const secondsPerBeatRealtime = 60 / this.metronomeBpm / this.tempo;
+    const secondsPerBeatInSong = 60 / this.metronomeBpm;
+    const secondsPerBeatRealtime = secondsPerBeatInSong / this.tempo;
     const horizon = this.ctx.currentTime + 0.25;
     while (this.metronomeNextClickTime < horizon) {
-      // ((n % 4) + 4) % 4 instead of plain (n % 4): JS gives negative
-      // remainders for negative n, so a naive check would put the accent
-      // on the wrong beat when N is negative (pre-anchor playback).
+      // Stop at the region boundary — the following region re-anchors, so
+      // let the next scheduling tick (with the new active segment) take over.
+      const clickSongTime = beatAnchor + this.metronomeBeatIndex * secondsPerBeatInSong;
+      if (clickSongTime >= nextStart) break;
+      // ((n % 4) + 4) % 4 handles negative n so the accent lands on the
+      // downbeat even during pre-anchor playback.
       const accent = (((this.metronomeBeatIndex % 4) + 4) % 4) === 0;
       this.scheduleClick(this.metronomeNextClickTime, accent);
       this.metronomeNextClickTime += secondsPerBeatRealtime;

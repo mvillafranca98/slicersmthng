@@ -3,6 +3,14 @@ export interface ChordEvent {
   chord: string;
 }
 
+/** One tempo region. `start` is the song-time (sec) where this tempo takes
+ *  over AND the downbeat anchor for its click grid. Clicks fall at
+ *  start + N*(60/bpm) until the next region begins. */
+export interface TempoSegment {
+  start: number;
+  bpm: number;
+}
+
 export interface Song {
   id: string;
   title: string;
@@ -16,9 +24,13 @@ export interface Song {
   /** User's manual BPM override, persisted via PUT /songs/<id>/tempo.
    *  Wins over auto-detected `bpm` when present. */
   bpm_user?: number | null;
-  /** User's manual downbeat phase override (-2..+2s), persisted.
-   *  Wins over `beat_offset` when present. Set by the "Mark beat 1" button. */
+  /** User's manual downbeat phase override, persisted. Wins over
+   *  `beat_offset` when present. Set by dragging the align-mode grid. */
   beat_offset_user?: number | null;
+  /** Full tempo map for songs with tempo changes. When present (length ≥ 1),
+   *  the first entry is the base tempo and the rest are added regions.
+   *  Supersedes bpm_user/beat_offset_user, which stay for back-compat. */
+  tempo_map?: TempoSegment[] | null;
   key: string;
   stems: string[];
   chords: ChordEvent[];

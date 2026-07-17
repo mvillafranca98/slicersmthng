@@ -1,11 +1,45 @@
 import { create } from 'zustand';
-import type { Song, StemState, Setlist } from '../types';
+import type { Song, StemState, Setlist, TempoSegment } from '../types';
 
 const defaultStemState = (): StemState => ({
   volume: 1,
   muted: false,
   solo: false,
 });
+
+/**
+ * Resolve the full ordered tempo map: the base tempo (from bpmOverride/
+ * beatOffsetSec, falling back to the song's detected BPM) followed by the
+ * added regions. Shared by the audio engine's metronome scheduler and the
+ * waveform grid so both agree on where clicks land. Always returns at least
+ * one segment, sorted by start ascending.
+ */
+export function resolveTempoSegments(
+  bpmOverride: number | null,
+  beatOffsetSec: number,
+  tempoSegments: TempoSegment[],
+  detectedBpm: number,
+): TempoSegment[] {
+  const clampBpm = (b: number) => Math.max(30, Math.min(300, b));
+  const base: TempoSegment = {
+    start: beatOffsetSec || 0,
+    bpm: clampBpm(bpmOverride ?? detectedBpm ?? 120),
+  };
+  const added = tempoSegments
+    .map((s) => ({ start: s.start, bpm: clampBpm(s.bpm) }))
+    .filter((s) => s.start > base.start);
+  return [base, ...added].sort((a, b) => a.start - b.start);
+}
+
+/** Index into the resolved list of the segment active at song-time `pos`
+ *  (the last segment whose start ≤ pos; clamps to 0 when pos precedes all). */
+export function activeSegmentIndex(segments: TempoSegment[], pos: number): number {
+  let idx = 0;
+  for (let i = 0; i < segments.length; i++) {
+    if (segments[i].start <= pos) idx = i; else break;
+  }
+  return idx;
+}
 
 interface PlayerState {
   currentSong: Song | null;
@@ -28,6 +62,11 @@ interface PlayerState {
   // accent landing every 4 beats from N=0. Set by the "Mark 1" button to
   // the current playback time, persisted per-song as beat_offset_user.
   beatOffsetSec: number;
+  // Added tempo regions BEYOND the base tempo. The base tempo is
+  // { start: beatOffsetSec, bpm: bpmOverride ?? song.bpm }; each entry here
+  // is an additional region that takes over at its `start`. Empty for
+  // single-tempo songs. Kept sorted by start, all with start > base.start.
+  tempoSegments: TempoSegment[];
   // When true, the waveform enters "align mode": stems grey out and the
   // metronome grid becomes a bright, draggable overlay so the user can
   // slide it onto the song's beats by eye. Not persisted — it's a
@@ -54,6 +93,11 @@ interface PlayerState {
   setBpmOverride: (v: number | null) => void;
   setBeatOffsetSec: (v: number) => void;
   setAlignMode: (v: boolean) => void;
+  // Add a tempo region at `start` (song-time) with `bpm`. Kept sorted.
+  addTempoSegment: (start: number, bpm: number) => void;
+  updateTempoSegment: (index: number, patch: Partial<TempoSegment>) => void;
+  removeTempoSegment: (index: number) => void;
+  setTempoSegments: (segs: TempoSegment[]) => void;
   setPlayMode: (m: 'stop' | 'continue' | 'repeat' | 'shuffle') => void;
   setExpanded: (v: boolean) => void;
   setActiveSetlist: (s: Setlist | null, index?: number) => void;
@@ -91,6 +135,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   })(),
   bpmOverride: null,
   beatOffsetSec: 0,
+  tempoSegments: [],
   alignMode: false,
   playMode: (() => {
     try {
@@ -116,9 +161,21 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
           carryStems[name] = prev[name] ? { ...prev[name] } : defaultStemState();
         }
       }
-      // Tempo override priority: user-set > drum-auto-detected > zero.
-      const beatOffset = song?.beat_offset_user ?? song?.beat_offset ?? 0;
-      const bpmOverride = song?.bpm_user ?? null;
+      // Rebuild the tempo model from the song's persisted data.
+      //  - If a full tempo_map exists, its first (earliest) entry is the
+      //    base tempo and the rest are the added regions.
+      //  - Otherwise fall back to the single bpm_user/beat_offset_user
+      //    fields (or the auto-detected values).
+      let beatOffset = song?.beat_offset_user ?? song?.beat_offset ?? 0;
+      let bpmOverride = song?.bpm_user ?? null;
+      let tempoSegments: TempoSegment[] = [];
+      const map = song?.tempo_map;
+      if (map && map.length > 0) {
+        const sorted = [...map].sort((a, b) => a.start - b.start);
+        beatOffset = sorted[0].start;
+        bpmOverride = sorted[0].bpm;
+        tempoSegments = sorted.slice(1);
+      }
       return {
         currentSong: song,
         stems: song ? (stems || carryStems) : {},
@@ -126,6 +183,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         currentTime: 0,
         bpmOverride,
         beatOffsetSec: beatOffset,
+        tempoSegments,
         alignMode: false,  // never carry the align editor across songs
       };
     });
@@ -162,6 +220,31 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   // anchors that get the grid math right for songs that start mid-bar.
   setBeatOffsetSec: (v) => set({ beatOffsetSec: Number.isFinite(v) ? v : 0 }),
   setAlignMode: (v) => set({ alignMode: v }),
+  addTempoSegment: (start, bpm) => set((state) => {
+    // Don't allow a region to start at/before the base anchor, and avoid
+    // near-duplicate boundaries (< 0.25s apart).
+    if (start <= state.beatOffsetSec + 0.1) return {};
+    if (state.tempoSegments.some((s) => Math.abs(s.start - start) < 0.25)) return {};
+    const next = [...state.tempoSegments, { start, bpm: Math.max(30, Math.min(300, bpm)) }]
+      .sort((a, b) => a.start - b.start);
+    return { tempoSegments: next };
+  }),
+  updateTempoSegment: (index, patch) => set((state) => {
+    const next = state.tempoSegments.map((s, i) => {
+      if (i !== index) return s;
+      const merged = { ...s, ...patch };
+      merged.bpm = Math.max(30, Math.min(300, merged.bpm));
+      if (!Number.isFinite(merged.start)) merged.start = s.start;
+      return merged;
+    }).sort((a, b) => a.start - b.start);
+    return { tempoSegments: next };
+  }),
+  removeTempoSegment: (index) => set((state) => ({
+    tempoSegments: state.tempoSegments.filter((_, i) => i !== index),
+  })),
+  setTempoSegments: (segs) => set({
+    tempoSegments: [...segs].sort((a, b) => a.start - b.start),
+  }),
   setPlayMode: (m) => {
     if (typeof window !== 'undefined') localStorage.setItem('slcr.playMode', m);
     set({ playMode: m });

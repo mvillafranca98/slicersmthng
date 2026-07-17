@@ -95,6 +95,11 @@ export function PlayerExpanded() {
     setBpmOverride,
     beatOffsetSec,
     setBeatOffsetSec,
+    tempoSegments,
+    addTempoSegment,
+    updateTempoSegment,
+    removeTempoSegment,
+    setTempoSegments,
     alignMode,
     setAlignMode,
     playMode,
@@ -248,53 +253,16 @@ export function PlayerExpanded() {
     }, 3000);
   };
 
-  // ---- Mark Beat 1 (per-song persisted downbeat anchor) ----
-  // Captures the playback position at the EXACT pointer-down event using
-  // the audio engine's live clock (drift-free vs the React `currentTime`
-  // which is up to one rAF frame stale). Pointer-down also fires ~50ms
-  // sooner than onClick, which fires on pointer-UP. Combined with the
-  // engine's cancelPendingClicks(), Mark 1 takes effect within ~10ms of
-  // your tap instead of feeling like a half-beat lag.
-  const markBeatOne = async (e?: React.PointerEvent) => {
-    // Read straight from the audio clock — same source the scheduler uses,
-    // so there's no quantization error.
-    const anchor = audioEngine.getPosition();
-    setBeatOffsetSec(anchor);
-    // Avoid the click-after-pointerdown firing twice on the same gesture.
-    e?.preventDefault();
-    try {
-      await api.updateSongTempo(currentSong.id, { beat_offset_user: anchor });
-      fetchSongs();
-      toast.success('Bar 1, beat 1 anchored here', {
-        description: 'Clicks restart from this moment and persist next time.',
-      });
-    } catch (err) {
-      toast.error('Saved locally — failed to persist', { description: (err as Error).message });
-    }
-  };
-
-  // Nudge the anchor a few milliseconds in either direction. Useful when
-  // Mark 1 was slightly off-tap; ±25ms is about one human-perceptible
-  // shift on a snare hit. Doesn't auto-persist — user clicks Mark 1 again
-  // (or the Reset button) to save / clear.
-  const nudgeAnchor = (deltaMs: number) => {
-    setBeatOffsetSec(beatOffsetSec + deltaMs / 1000);
-  };
-  // Keyboard shortcuts while the expanded player is open:
-  //   M = Mark beat 1 (lowest-latency input — keyboard down event fires
-  //       before pointer-up, ahead of even onPointerDown on a mouse)
-  //   T = Tap-tempo
-  // We skip when the user is typing in an input (title edit, BPM number).
+  // Keyboard shortcut: T = tap tempo (skipped while typing in an input).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-      if (e.key === 'm' || e.key === 'M') { e.preventDefault(); markBeatOne(); }
-      else if (e.key === 't' || e.key === 'T') { e.preventDefault(); handleTap(); }
+      if (e.key === 't' || e.key === 'T') { e.preventDefault(); handleTap(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-    // markBeatOne / handleTap close over current values; recreate on song change
+    // handleTap closes over current values; recreate on song change
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSong?.id]);
 
@@ -415,10 +383,12 @@ export function PlayerExpanded() {
 
   const resetTempo = async () => {
     setBpmOverride(null);
-    // Restore to the auto-detected drum phase (or 0 for older slices).
+    // Restore to the auto-detected drum phase (or 0 for older slices) and
+    // clear any tempo regions.
     setBeatOffsetSec(currentSong.beat_offset ?? 0);
+    for (let i = tempoSegments.length - 1; i >= 0; i--) removeTempoSegment(i);
     try {
-      await api.updateSongTempo(currentSong.id, { bpm_user: null, beat_offset_user: null });
+      await api.updateSongTempo(currentSong.id, { bpm_user: null, beat_offset_user: null, tempo_map: null });
       fetchSongs();
     } catch { /* still reset locally even if persist fails */ }
   };
@@ -432,16 +402,28 @@ export function PlayerExpanded() {
     setAlignMode(true);
     if (!isPlaying) setPlaying(true);
   };
+  // Build the full tempo map (base + added regions) to persist.
+  const buildTempoMap = () => {
+    const base = { start: beatOffsetSec, bpm: bpmOverride ?? Math.round(bpm) };
+    const added = tempoSegments.map((s) => ({ start: s.start, bpm: s.bpm }));
+    return [base, ...added].sort((a, b) => a.start - b.start);
+  };
   const saveAlign = async () => {
     setAlignMode(false);
+    const map = buildTempoMap();
     try {
       await api.updateSongTempo(currentSong.id, {
-        bpm_user: bpmOverride ?? Math.round(bpm),
-        beat_offset_user: beatOffsetSec,
+        bpm_user: map[0].bpm,
+        beat_offset_user: map[0].start,
+        // Only send a tempo_map when there's an actual tempo change; a
+        // single-region song just uses bpm_user/beat_offset_user.
+        tempo_map: map.length > 1 ? map : null,
       });
       fetchSongs();
       toast.success('Metronome alignment saved for this song', {
-        description: 'It will load automatically next time.',
+        description: map.length > 1
+          ? `${map.length} tempo regions saved · loads automatically next time.`
+          : 'It will load automatically next time.',
       });
     } catch (e) {
       toast.error('Saved locally — failed to persist', { description: (e as Error).message });
@@ -449,9 +431,26 @@ export function PlayerExpanded() {
   };
   const cancelAlign = () => {
     setAlignMode(false);
-    // Revert to whatever was persisted (or auto-detected) for this song.
-    setBpmOverride(currentSong.bpm_user ?? null);
-    setBeatOffsetSec(currentSong.beat_offset_user ?? currentSong.beat_offset ?? 0);
+    // Light revert to the persisted (or auto-detected) values — no mixer
+    // reset / no seek, unlike setCurrentSong.
+    const map = currentSong.tempo_map;
+    if (map && map.length > 0) {
+      const sorted = [...map].sort((a, b) => a.start - b.start);
+      setBpmOverride(sorted[0].bpm);
+      setBeatOffsetSec(sorted[0].start);
+      setTempoSegments(sorted.slice(1));
+    } else {
+      setBpmOverride(currentSong.bpm_user ?? null);
+      setBeatOffsetSec(currentSong.beat_offset_user ?? currentSong.beat_offset ?? 0);
+      setTempoSegments([]);
+    }
+  };
+
+  // ---- Add a tempo change at the current playhead ----
+  const addTempoHere = () => {
+    // New region inherits the BPM of whichever region the playhead is in.
+    const startBpm = bpmOverride ?? Math.round(bpm);
+    addTempoSegment(currentTime, startBpm);
   };
 
   // ---- Loop in bars ----
@@ -772,7 +771,7 @@ export function PlayerExpanded() {
                   type="button"
                   onClick={resetTempo}
                   className="text-[10px] text-text-muted hover:text-text-primary"
-                  title="Restore the auto-detected BPM and clear your Mark 1"
+                  title="Restore the auto-detected BPM and clear any tempo regions"
                 >
                   reset
                 </button>
@@ -815,34 +814,14 @@ export function PlayerExpanded() {
                 >
                   Tap{tapCount > 0 ? ` ${tapCount}` : ''}
                 </button>
-                <span className="text-white/20 mx-1">|</span>
-                <button
-                  type="button"
-                  onPointerDown={markBeatOne}
-                  // No onClick: pointerdown already handled the gesture.
-                  title="PRESS on the beat — anchors bar 1, beat 1 here. Press-down latency, not click."
-                  className="h-7 px-2 rounded text-[10px] font-mono bg-primary/15 text-primary border border-primary/30 hover:bg-primary/25 active:bg-primary/30"
-                >
-                  Mark 1
-                </button>
-                <button
-                  type="button"
-                  onClick={() => nudgeAnchor(-25)}
-                  title="Shift Mark 1 anchor 25ms earlier"
-                  className="h-7 w-7 grid place-items-center rounded text-[10px] font-mono bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary"
-                >‹‹</button>
-                <button
-                  type="button"
-                  onClick={() => nudgeAnchor(25)}
-                  title="Shift Mark 1 anchor 25ms later"
-                  className="h-7 w-7 grid place-items-center rounded text-[10px] font-mono bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary"
-                >››</button>
-                <span className="text-[10px] font-mono text-text-muted tabular-nums">
-                  anchor: {beatOffsetSec.toFixed(2)}s
-                </span>
+                {tempoSegments.length > 0 && (
+                  <span className="text-[10px] font-mono text-primary tabular-nums">
+                    {tempoSegments.length + 1} tempos
+                  </span>
+                )}
               </div>
               <p className="mt-1 text-[10px] text-text-muted">
-                If clicks are off: tap <kbd className="px-1 py-px rounded bg-white/10 text-text-primary">T</kbd> 4+ times to fix BPM, then tap <kbd className="px-1 py-px rounded bg-white/10 text-text-primary">M</kbd> on a downbeat to anchor the bar — keyboard taps fire ~50ms faster than mouse clicks. <strong>‹‹ / ››</strong> nudges by 25ms.
+                Set the BPM (type it, or tap <kbd className="px-1 py-px rounded bg-white/10 text-text-primary">T</kbd> 4+ times), then use <strong>Align</strong> below to drag the grid onto the beats.
               </p>
 
               {/* Visual align mode — drag the grid onto the waveform */}
@@ -859,8 +838,52 @@ export function PlayerExpanded() {
                 ) : (
                   <div className="space-y-2">
                     <p className="text-[10px] text-primary">
-                      Align mode on — set the BPM above, then <strong>drag the amber grid</strong> on the waveform until the bar lines sit on the beats. Click (no drag) to jump around and check.
+                      <strong>Drag the amber grid</strong> on the waveform until the bar lines sit on the beats. Click (no drag) to jump around and check. For a song that changes tempo, seek to the change and hit <strong>Add tempo</strong>.
                     </p>
+
+                    {/* Tempo regions list */}
+                    <div className="rounded-lg bg-bg-card/60 border border-white/5 p-2 space-y-1.5">
+                      {/* Base region row (implicit — edits the BPM field above) */}
+                      <div className="flex items-center gap-2 text-[10px]">
+                        <span className="w-2 h-2 rounded-full bg-primary shrink-0" />
+                        <span className="text-text-secondary flex-1">from 0:00</span>
+                        <span className="font-mono text-text-primary">{bpmOverride ?? Math.round(bpm)} BPM</span>
+                        <span className="text-text-muted w-14 text-right">base</span>
+                      </div>
+                      {tempoSegments.map((seg, i) => (
+                        <div key={i} className="flex items-center gap-2 text-[10px]">
+                          <span className="w-2 h-2 rounded-full bg-accent-cyan shrink-0" />
+                          <span className="text-text-secondary flex-1">from {formatTime(seg.start)}</span>
+                          <input
+                            type="number"
+                            min={30}
+                            max={300}
+                            step={1}
+                            value={seg.bpm}
+                            onChange={(e) => updateTempoSegment(i, { bpm: Number(e.target.value) })}
+                            aria-label={`Region ${i + 2} BPM`}
+                            className="w-12 rounded bg-bg-card border border-white/10 px-1 py-0.5 font-mono text-text-primary text-center focus:outline-none focus:ring-1 focus:ring-primary"
+                          />
+                          <span className="text-text-muted">BPM</span>
+                          <button
+                            type="button"
+                            onClick={() => removeTempoSegment(i)}
+                            aria-label="Remove tempo region"
+                            className="h-5 w-5 grid place-items-center rounded text-text-muted hover:text-accent-red hover:bg-accent-red/10"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={addTempoHere}
+                        className="w-full h-7 inline-flex items-center justify-center gap-1.5 rounded text-[10px] font-medium bg-white/[0.04] border border-white/5 text-text-secondary hover:text-text-primary transition-colors"
+                      >
+                        + Add tempo change at {formatTime(currentTime)}
+                      </button>
+                    </div>
+
                     <div className="flex gap-2">
                       <button
                         type="button"

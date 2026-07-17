@@ -47,8 +47,8 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ title, artist }),
     }),
-  updateSongTempo: (songId: string, patch: { bpm_user?: number | null; beat_offset_user?: number | null }) =>
-    request<{ ok: boolean; bpm_user: number | null; beat_offset_user: number | null }>(`/songs/${songId}/tempo`, {
+  updateSongTempo: (songId: string, patch: { bpm_user?: number | null; beat_offset_user?: number | null; tempo_map?: import('./types').TempoSegment[] | null }) =>
+    request<{ ok: boolean }>(`/songs/${songId}/tempo`, {
       method: 'PUT',
       body: JSON.stringify(patch),
     }),

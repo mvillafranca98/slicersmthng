@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { usePlayerStore } from '../stores/playerStore';
+import { usePlayerStore, resolveTempoSegments, activeSegmentIndex } from '../stores/playerStore';
 import { audioEngine } from '../lib/audioEngine';
 
 /**
@@ -69,10 +69,12 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
   const alignMode = usePlayerStore((s) => s.alignMode);
   const bpmOverride = usePlayerStore((s) => s.bpmOverride);
   const beatOffsetSec = usePlayerStore((s) => s.beatOffsetSec);
+  const tempoSegments = usePlayerStore((s) => s.tempoSegments);
 
   // Drag state for align-mode grid nudging. Refs (not state) so the pointer
-  // handlers don't re-render mid-drag.
-  const dragRef = useRef<{ startX: number; startAnchor: number; moved: boolean } | null>(null);
+  // handlers don't re-render mid-drag. segIndex is the RESOLVED-list index
+  // of the region being dragged (0 = base tempo).
+  const dragRef = useRef<{ startX: number; startVal: number; segIndex: number; moved: boolean } | null>(null);
 
   // Resize observer keeps the canvases sized to their container
   useEffect(() => {
@@ -161,30 +163,37 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
     }
     ctx.globalAlpha = 1;
 
-    // Beat grid. Uses the SAME anchor + BPM the audio engine's metronome
-    // uses (bpmOverride ?? song.bpm, plus the beatOffsetSec anchor), so the
-    // lines you see are exactly where the clicks land. Accent every 4th
-    // beat (bar 1). In align mode the grid is bright + amber and the accents
-    // get a taller cap so it's easy to line up by eye; otherwise it's faint.
+    // Beat grid — draws every tempo region using the same resolved map the
+    // audio engine clicks on, so the lines you see are exactly where the
+    // clicks land. Each region's grid is anchored at its start and stops at
+    // the next region's start. Accent every 4th beat (bar 1). In align mode
+    // the grid is bright amber with taller caps on downbeats; the active
+    // region (playhead's) is brightest so you know what a drag will move.
     if (currentSong && duration > 0) {
-      const bpm = Math.max(30, Math.min(300, bpmOverride ?? currentSong.bpm ?? 120));
-      const secondsPerBeat = 60 / bpm;
-      const anchor = beatOffsetSec || 0;
-      // Enumerate beats within [0, duration]: t = anchor + N*period.
-      const firstN = Math.ceil((0 - anchor) / secondsPerBeat);
-      const lastN = Math.floor((duration - anchor) / secondsPerBeat);
-      const totalBeats = lastN - firstN;
-      if (totalBeats <= 3000) {  // guard against absurd BPM/duration combos
+      const segs = resolveTempoSegments(bpmOverride, beatOffsetSec, tempoSegments, currentSong.bpm ?? 120);
+      const activeIdx = alignMode ? activeSegmentIndex(segs, currentTime) : -1;
+      for (let si = 0; si < segs.length; si++) {
+        const seg = segs[si];
+        const secondsPerBeat = 60 / seg.bpm;
+        const regionEnd = si + 1 < segs.length ? Math.min(segs[si + 1].start, duration) : duration;
+        // Base region (si=0) extends backward to 0; added regions start at
+        // their anchor (a tempo change begins on its downbeat).
+        const regionStart = si === 0 ? 0 : seg.start;
+        const firstN = Math.ceil((regionStart - seg.start) / secondsPerBeat);
+        const lastN = Math.floor((regionEnd - seg.start) / secondsPerBeat);
+        if (lastN - firstN > 3000) continue;  // guard absurd BPM/duration
+        const isActive = si === activeIdx;
         for (let n = firstN; n <= lastN; n++) {
-          const t = anchor + n * secondsPerBeat;
+          const t = seg.start + n * secondsPerBeat;
+          if (t < 0 || t > duration) continue;
           const x = (t / duration) * width;
           const isBar = (((n % 4) + 4) % 4) === 0;
           if (alignMode) {
-            ctx.fillStyle = isBar ? 'rgba(255,169,77,0.95)' : 'rgba(255,169,77,0.45)';
+            const base = isActive ? 1 : 0.4;
+            ctx.fillStyle = isBar ? `rgba(255,169,77,${base})` : `rgba(255,169,77,${base * 0.5})`;
             ctx.fillRect(Math.round(x), 0, isBar ? 2 : 1, height);
-            // Downbeat cap so bars are unmistakable while dragging.
             if (isBar) {
-              ctx.fillStyle = 'rgba(255,169,77,1)';
+              ctx.fillStyle = `rgba(255,169,77,${base})`;
               ctx.fillRect(Math.round(x) - 2, 0, 5, 5);
               ctx.fillRect(Math.round(x) - 2, height - 5, 5, 5);
             }
@@ -192,6 +201,13 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
             ctx.fillStyle = isBar ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.04)';
             ctx.fillRect(Math.round(x), 0, 1, height);
           }
+        }
+        // Region boundary marker (cyan flag) for added regions.
+        if (si > 0) {
+          const bx = (seg.start / duration) * width;
+          ctx.fillStyle = 'rgba(0,229,255,0.9)';
+          ctx.fillRect(Math.round(bx), 0, 2, height);
+          ctx.fillRect(Math.round(bx), 0, 10, 5);
         }
       }
     }
@@ -209,7 +225,7 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
       ctx.moveTo(x2 - 0.5, 0); ctx.lineTo(x2 - 0.5, height);
       ctx.stroke();
     }
-  }, [peaksReady, width, height, stems, loopA, loopB, loopActive, currentSong?.bpm, currentSong?.id, duration, alignMode, bpmOverride, beatOffsetSec]);
+  }, [peaksReady, width, height, stems, loopA, loopB, loopActive, currentSong?.bpm, currentSong?.id, duration, alignMode, bpmOverride, beatOffsetSec, tempoSegments, currentTime]);
 
   // Dynamic layer: just the playhead cursor
   useEffect(() => {
@@ -248,16 +264,23 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
     audioEngine.seek(t);
   };
 
-  // ---- Align-mode drag: slide the whole beat grid to line it up ----
-  // A horizontal drag shifts beatOffsetSec by the drag's time-equivalent
-  // (dx / width * duration). A click that doesn't move still seeks, so the
-  // user can jump around the song to check alignment at different points.
+  // ---- Align-mode drag: slide the active region's grid to line it up ----
+  // The region being dragged is the one the PLAYHEAD is currently in (its
+  // grid is drawn brightest). Dragging shifts that region's start by the
+  // drag's time-equivalent (dx/width*duration). For the base region (index
+  // 0) that's beatOffsetSec; for an added region it's that segment's start.
+  // A click that doesn't move still seeks, so the user can jump to a
+  // section and then align it.
   const onPointerDown = (e: React.PointerEvent) => {
     if (!alignMode || !duration) return;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    const st = usePlayerStore.getState();
+    const segs = resolveTempoSegments(st.bpmOverride, st.beatOffsetSec, st.tempoSegments, currentSong?.bpm ?? 120);
+    const segIndex = activeSegmentIndex(segs, st.currentTime);
     dragRef.current = {
       startX: e.clientX,
-      startAnchor: usePlayerStore.getState().beatOffsetSec || 0,
+      startVal: segs[segIndex].start,
+      segIndex,
       moved: false,
     };
   };
@@ -268,7 +291,15 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
     const dx = e.clientX - drag.startX;
     if (Math.abs(dx) > 2) drag.moved = true;
     const dt = (dx / rect.width) * duration;
-    usePlayerStore.getState().setBeatOffsetSec(drag.startAnchor + dt);
+    const newStart = drag.startVal + dt;
+    const st = usePlayerStore.getState();
+    if (drag.segIndex === 0) {
+      st.setBeatOffsetSec(newStart);
+    } else {
+      // Added regions are indexed 1..N in the resolved list, which maps to
+      // tempoSegments[segIndex-1] (base is index 0). Clamp handled in store.
+      st.updateTempoSegment(drag.segIndex - 1, { start: newStart });
+    }
   };
   const onPointerUp = (e: React.PointerEvent) => {
     const drag = dragRef.current;

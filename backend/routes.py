@@ -508,8 +508,40 @@ def update_song_tempo(song_id):
             except (TypeError, ValueError):
                 return jsonify({"error": "beat_offset_user must be a finite number"}), 400
 
+    if "tempo_map" in payload:
+        v = payload["tempo_map"]
+        if v is None or v == []:
+            meta.pop("tempo_map", None)
+        else:
+            # A list of {start, bpm} regions. Validate + clamp each; reject
+            # garbage. Cap the count so a malformed client can't bloat meta.
+            if not isinstance(v, list) or len(v) > 64:
+                return jsonify({"error": "tempo_map must be a list of ≤64 regions"}), 400
+            clean = []
+            for seg in v:
+                if not isinstance(seg, dict):
+                    return jsonify({"error": "each tempo region must be an object"}), 400
+                try:
+                    start = float(seg.get("start"))
+                    bpm = float(seg.get("bpm"))
+                except (TypeError, ValueError):
+                    return jsonify({"error": "tempo region start/bpm must be numbers"}), 400
+                if not (start == start and bpm == bpm):  # NaN guard
+                    return jsonify({"error": "tempo region values must be finite"}), 400
+                clean.append({
+                    "start": max(-3600.0, min(3600.0, start)),
+                    "bpm": max(30.0, min(300.0, bpm)),
+                })
+            clean.sort(key=lambda s: s["start"])
+            meta["tempo_map"] = clean
+
     save_song_meta(song_id, meta, meta_path)
-    return jsonify({"ok": True, "bpm_user": meta.get("bpm_user"), "beat_offset_user": meta.get("beat_offset_user")})
+    return jsonify({
+        "ok": True,
+        "bpm_user": meta.get("bpm_user"),
+        "beat_offset_user": meta.get("beat_offset_user"),
+        "tempo_map": meta.get("tempo_map"),
+    })
 
 
 @api.route("/songs/<song_id>/lyrics")
