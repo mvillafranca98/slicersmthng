@@ -360,7 +360,7 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
   return (
     <div
       ref={containerRef}
-      className={`relative w-full select-none ${alignMode ? 'cursor-ew-resize ring-1 ring-primary/50 rounded-md' : 'cursor-pointer'}`}
+      className={`relative w-full select-none ${alignMode ? 'cursor-ew-resize ring-1 ring-primary/50 rounded-md touch-none' : 'cursor-pointer'}`}
       style={{ height }}
       onClick={alignMode ? undefined : onSeek}
       onPointerDown={onPointerDown}
@@ -377,16 +377,16 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
 
       {/* Zoom controls — shown in align mode for precise dragging. */}
       {alignMode && (
-        <div className="absolute bottom-1 right-1 flex items-center gap-1">
+        <div className="absolute bottom-1.5 right-1.5 flex items-center gap-1.5">
           <button
             type="button"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); zoomOut(); }}
             disabled={zoom <= 1}
             aria-label="Zoom out"
-            className="h-6 w-6 grid place-items-center rounded bg-bg-deepest/80 border border-white/10 text-text-secondary hover:text-text-primary disabled:opacity-30 text-sm leading-none"
+            className="h-8 w-8 grid place-items-center rounded-lg bg-bg-deepest/90 border border-white/10 text-text-secondary hover:text-text-primary disabled:opacity-30 text-base leading-none"
           >−</button>
-          <span className="px-1.5 h-6 grid place-items-center rounded bg-bg-deepest/80 border border-white/10 text-[10px] font-mono text-text-primary tabular-nums">
+          <span className="px-2 h-8 grid place-items-center rounded-lg bg-bg-deepest/90 border border-white/10 text-[11px] font-mono text-text-primary tabular-nums">
             {zoom}×
           </span>
           <button
@@ -395,7 +395,7 @@ export function WaveformView({ height = 110 }: { height?: number; showBeatGrid?:
             onClick={(e) => { e.stopPropagation(); zoomIn(); }}
             disabled={zoom >= 32}
             aria-label="Zoom in"
-            className="h-6 w-6 grid place-items-center rounded bg-bg-deepest/80 border border-white/10 text-text-secondary hover:text-text-primary disabled:opacity-30 text-sm leading-none"
+            className="h-8 w-8 grid place-items-center rounded-lg bg-bg-deepest/90 border border-white/10 text-text-secondary hover:text-text-primary disabled:opacity-30 text-base leading-none"
           >+</button>
         </div>
       )}

@@ -513,16 +513,16 @@ export function PlayerExpanded() {
       style={{ height: '100vh' }}
     >
       {/* ----- Header: song info + transport + collapse ----- */}
-      <div className="shrink-0 px-5 py-4 border-b border-white/5 flex items-center gap-4">
+      <div className="shrink-0 px-3 sm:px-5 py-4 border-b border-white/5 flex items-center gap-2 sm:gap-4">
         {!imgError ? (
           <img
             src={thumb}
             alt=""
-            className="w-14 h-14 rounded-lg object-cover ring-1 ring-white/10 shrink-0"
+            className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg object-cover ring-1 ring-white/10 shrink-0"
             onError={() => setImgError(true)}
           />
         ) : (
-          <div className="w-14 h-14 rounded-lg ring-1 ring-white/10 shrink-0 grid place-items-center bg-gradient-to-br from-bg-elevated to-bg-deepest">
+          <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg ring-1 ring-white/10 shrink-0 grid place-items-center bg-gradient-to-br from-bg-elevated to-bg-deepest">
             <Music2 className="w-6 h-6 text-text-muted" />
           </div>
         )}
@@ -609,7 +609,7 @@ export function PlayerExpanded() {
           >
             <SkipBack className="w-4 h-4" />
           </TransportButton>
-          <TransportButton aria-label="Rewind 10s" onClick={() => seek(Math.max(0, currentTime - 10))}>
+          <TransportButton aria-label="Rewind 10s" onClick={() => seek(Math.max(0, currentTime - 10))} className="hidden sm:grid">
             <Rewind className="w-4 h-4" />
           </TransportButton>
           <button
@@ -620,7 +620,7 @@ export function PlayerExpanded() {
           >
             {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current translate-x-px" />}
           </button>
-          <TransportButton aria-label="Forward 10s" onClick={() => seek(Math.min(duration, currentTime + 10))}>
+          <TransportButton aria-label="Forward 10s" onClick={() => seek(Math.min(duration, currentTime + 10))} className="hidden sm:grid">
             <FastForward className="w-4 h-4" />
           </TransportButton>
           <TransportButton
@@ -650,7 +650,7 @@ export function PlayerExpanded() {
           onClick={() => setDownloadOpen(true)}
           aria-label="Download stems"
           title="Download selected stems — merged into one mp3 or as separate files in a zip"
-          className="ml-2 h-9 w-9 grid place-items-center rounded-lg bg-white/[0.04] border border-white/5 text-text-secondary hover:text-primary hover:border-primary/40 transition-colors shrink-0"
+          className="hidden sm:grid ml-2 h-9 w-9 place-items-center rounded-lg bg-white/[0.04] border border-white/5 text-text-secondary hover:text-primary hover:border-primary/40 transition-colors shrink-0"
         >
           <Download className="w-4 h-4" />
         </button>
@@ -665,11 +665,11 @@ export function PlayerExpanded() {
       </div>
 
       {/* ----- Waveform + time readout ----- */}
-      <div className="shrink-0 px-5 pt-3 pb-2 border-b border-white/5 space-y-2">
+      <div className="shrink-0 px-3 sm:px-5 pt-3 pb-2 border-b border-white/5 space-y-2">
         <WaveformView height={96} />
         <div className="flex items-center justify-between">
           <span className="text-[11px] font-mono text-text-muted tabular-nums">{formatTime(currentTime)}</span>
-          <span className="text-[10px] text-text-muted">
+          <span className="hidden sm:block text-[10px] text-text-muted">
             Click the waveform to seek · faint vertical lines mark beats (every 4th = bar)
           </span>
           <span className="text-[11px] font-mono text-text-muted tabular-nums">{formatTime(duration)}</span>
@@ -677,7 +677,7 @@ export function PlayerExpanded() {
       </div>
 
       {/* ----- Body: chord + mixer + controls ----- */}
-      <div className="flex-1 overflow-auto px-5 py-4 space-y-5">
+      <div className="flex-1 overflow-auto px-3 sm:px-5 py-4 space-y-5">
 
         {/* Chord timeline (real detection lands with task #13 on Modal) */}
         <section>
