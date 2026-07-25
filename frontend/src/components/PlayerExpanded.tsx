@@ -509,8 +509,14 @@ export function PlayerExpanded() {
       animate={{ y: 0 }}
       exit={{ y: '100%' }}
       transition={{ type: 'spring', stiffness: 360, damping: 40 }}
-      className="fixed bottom-0 inset-x-0 z-[150] glass border-t border-white/10 flex flex-col"
-      style={{ height: '100vh' }}
+      // h-screen (100vh) is the fallback base; the inline height:100dvh
+      // overrides it where supported. On a browser without dvh the invalid
+      // inline value is dropped and h-screen applies. 100dvh = the
+      // actually-visible height on mobile, unlike 100vh which ignores the
+      // browser's URL/toolbar chrome and pushed the transport header above
+      // the fold (buttons "stuck at the top" / cut off).
+      className="fixed bottom-0 inset-x-0 z-[150] glass border-t border-white/10 flex flex-col h-screen"
+      style={{ height: '100dvh', maxHeight: '100dvh' }}
     >
       {/* ----- Header: song info + transport + collapse ----- */}
       <div className="shrink-0 px-3 sm:px-5 py-4 border-b border-white/5 flex items-center gap-2 sm:gap-4">
@@ -677,7 +683,9 @@ export function PlayerExpanded() {
       </div>
 
       {/* ----- Body: chord + mixer + controls ----- */}
-      <div className="flex-1 overflow-auto px-3 sm:px-5 py-4 space-y-5">
+      {/* pb includes the iOS home-indicator safe area so the last controls
+          aren't hidden behind it. */}
+      <div className="flex-1 overflow-auto px-3 sm:px-5 pt-4 space-y-5 pb-[calc(1rem+env(safe-area-inset-bottom))]">
 
         {/* Chord timeline (real detection lands with task #13 on Modal) */}
         <section>
