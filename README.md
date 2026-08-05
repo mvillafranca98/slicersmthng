@@ -1,164 +1,183 @@
-# SlicerSmthng
+<div align="center">
 
-A music practice workstation: paste a YouTube link, AI splits it into stems (vocals, drums, bass, guitar, piano, other), then practice with isolated stems, A/B loops, slowdown, chord detection, and setlists.
+# 🎚️ SlicerSmthng
 
-**Stack:** Flask + React + Vite + Tailwind. Stem separation runs on a cloud GPU via [Modal](https://modal.com) (free $30/mo credit) or [Replicate](https://replicate.com) (pay-as-you-go). Audio is fetched via yt-dlp, which natively supports SoundCloud, Bandcamp, YouTube, Vimeo, Mixcloud, Audius, and ~1,800 other sites. Or just drop in any MP3/WAV/FLAC/M4A file directly.
+### An AI-powered practice workstation that splits any song into its individual instruments.
 
-For the full product spec, see [`PRD.md`](./PRD.md).
+Paste a link, get isolated **vocals · drums · bass · guitar · piano** — then mute what you play, slow it down without changing pitch, loop the hard bar, and rehearse against a beat-aligned metronome.
+
+![React](https://img.shields.io/badge/React_19-20232A?logo=react&logoColor=61DAFB)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white)
+![Flask](https://img.shields.io/badge/Flask-000000?logo=flask&logoColor=white)
+![PyTorch](https://img.shields.io/badge/Demucs_(PyTorch)-EE4C2C?logo=pytorch&logoColor=white)
+![Modal](https://img.shields.io/badge/Modal_Serverless_GPU-7B68EE)
+![Cloudflare R2](https://img.shields.io/badge/Cloudflare_R2-F38020?logo=cloudflare&logoColor=white)
+![Tailwind](https://img.shields.io/badge/Tailwind-06B6D4?logo=tailwindcss&logoColor=white)
+
+</div>
 
 ---
 
-## Quick deploy to Render (production)
+## What it is
 
-1. **Get a Replicate API token** at <https://replicate.com/account/api-tokens>. (Pay-as-you-go, ~$0.02 per song with the default `htdemucs` model.)
-2. **Push this repo to GitHub.**
-3. In the [Render dashboard](https://dashboard.render.com): **New +** → **Blueprint** → pick this repo. Render reads `render.yaml` and provisions a free web service.
-4. After the first build, go to the service's **Environment** tab and set `REPLICATE_API_TOKEN` to the token from step 1.
-5. Open the URL Render gives you (`https://<your-service>.onrender.com`). Paste a YouTube link, click **Slice It**.
+Learning a song by ear is hard when every instrument is glued into one stereo mix. **SlicerSmthng** takes a song — from a YouTube/SoundCloud/Bandcamp link or an uploaded file — and uses a deep-learning source-separation model to pull it apart into individual instrument stems. It then hands those stems to a browser-based mixing engine built for practice: solo the guitar to learn a riff, mute the vocals for karaoke, drop the tempo to 75% **without dropping the pitch**, loop four bars until they're clean, and run a metronome locked to the actual beat grid.
 
-**Free-tier caveats:**
-- The service sleeps after 15 min idle and takes ~30 sec to wake on the next request.
-- Stems live on the container's ephemeral disk — they're lost on every restart (every code push, every wake from sleep). Fine for personal use; if you want persistence, attach a Render Disk ($0.25/GB/mo) or move stem storage to Cloudflare R2 (10 GB free).
+It's the tool I wanted as a musician: a rehearsal room where you control every instrument independently.
 
-### Persistent stem storage on Cloudflare R2 (recommended)
+> **Live demo:** [slicersmthng.onrender.com](https://slicersmthng.onrender.com) — access-gated (it's used by a private band). See the screenshots below, or reach out for a walkthrough.
 
-Render's container disk is ephemeral — songs get wiped on every code push and every container restart. To keep your library between deploys, configure Cloudflare R2 (free up to 10 GB, ~$0.015/GB/mo after, zero egress fees):
+<!-- TODO: add screenshots / a short GIF here — they make the biggest difference on a portfolio.
+     Great candidates: the expanded player with the colored multi-stem waveform, the mixer grid,
+     and the metronome drag-to-align mode. Drop them in a docs/ folder and reference below. -->
+<!-- ![Player](docs/player.png) -->
 
-1. Sign up at <https://dash.cloudflare.com> (free, no card).
-2. Sidebar **R2** → **Create bucket**. Name it `slicersmthng-stems` (or anything). Choose a region.
-3. In the bucket → **Settings** → **Public access** → **Allow public access**. Copy the **R2.dev URL** (looks like `https://pub-xxxxxxxxxxxx.r2.dev`).
-4. Sidebar **R2** → **Manage R2 API Tokens** → **Create API Token**. Permissions: **Object Read & Write**. Scope to your bucket. Copy the **Access Key ID** + **Secret Access Key** + **Account ID**.
+---
 
-Then on **Modal** (where stems get uploaded directly to save bandwidth):
-```bash
-modal secret create r2-credentials \
-    R2_ACCOUNT_ID=<your account id> \
-    R2_ACCESS_KEY_ID=<your r2 access key> \
-    R2_SECRET_ACCESS_KEY=<your r2 secret> \
-    R2_BUCKET=<your bucket name> \
-    R2_PUBLIC_URL_BASE=https://pub-<id>.r2.dev   # NO trailing slash
-modal deploy modal_demucs.py
+## Highlights
+
+| | |
+|---|---|
+| 🎛️ **Up to 6 isolated stems** | Vocals, drums, bass, guitar, piano, other — via Hybrid-Transformer Demucs on GPU |
+| ⏱️ **Pitch-neutral tempo** | Slow to 50–120% with no chipmunk effect (granular time-stretch), plus independent ±12-semitone pitch shift |
+| 🎚️ **Real-time stem mixer** | Per-stem volume / mute / solo, mixed live in the browser with the Web Audio API |
+| 🌊 **Multi-stem colored waveform** | Every instrument drawn in its own color on one canvas, with a draggable beat grid + zoom |
+| 🥁 **Beat-aligned metronome** | Auto-detected BPM + downbeat, a visual drag-to-align editor, and multi-tempo-region support |
+| 🔁 **A/B looping** | Snap-to-bar loop points for drilling a section |
+| 🎤 **On-demand refinement** | Split vocals into lead + backing (a second neural net), or a stereo stem into L/R channels |
+| 📝 **Synced lyrics + key/chord detection** | LRCLib-synced lyrics that scroll with playback; key & chords from DSP analysis |
+| 📥 **Stem export** | Download selected stems as separate files or merged into one backing-track mp3 |
+| 🎵 **Setlists** | Group songs, carry mixer state across tracks, auto-advance with prefetch for gapless practice |
+
+---
+
+## Architecture
+
+The interesting engineering isn't a single model call — it's orchestrating a **serverless GPU**, **object storage**, and a **real-time audio engine** into one responsive app on a free-tier budget.
+
+```mermaid
+flowchart LR
+    A[React + TypeScript SPA<br/>Web Audio mixing engine] -- paste link / upload --> B[Flask API<br/>on Render]
+    B -- audio --> C[yt-dlp ingest]
+    B -- dispatch job --> D[Modal<br/>Serverless GPU · T4]
+    D -- inference --> E[Demucs<br/>source separation]
+    D -- upload stems --> F[(Cloudflare R2<br/>S3-compatible storage)]
+    F -- stem URLs --> B
+    B -- SocketIO progress --> A
+    A -- stream stems --> F
+    B -. metadata .-> G[MusicBrainz / iTunes / LRCLib]
 ```
 
-And on **Render** (so the backend can build URLs for the stem-redirect endpoint), set the same 5 env vars in the service's Environment tab. Save → Render redeploys → songs slicked from now on get uploaded to R2 and survive forever.
-
-Existing songs from before R2 was wired stay on local disk and continue to work (the stem endpoint falls through to local files when no `stem_urls` is in the meta).
+**Request lifecycle:** the SPA sends a link to the Flask API → `yt-dlp` pulls the audio → the job is dispatched to a **Modal** serverless GPU that runs **Demucs** inference → separated stems are uploaded straight to **Cloudflare R2** → the browser streams them back and mixes them live. Job progress streams to the UI over **SocketIO**.
 
 ---
 
-### Stem separator: Replicate (paid) or Modal (free)
+## The engineering problems worth talking about
 
-The backend can talk to either:
-- **Replicate** (default) — pay-as-you-go, ~$0.02/song with `htdemucs`. Need to add credit at <https://replicate.com/account/billing>. Set `REPLICATE_API_TOKEN`.
-- **Modal** (free up to $30/mo of compute, ~1,600 free song separations) — set `STEM_SEPARATOR=modal` and `MODAL_DEMUCS_URL=<your modal endpoint>`.
+These are the decisions that shaped the build:
 
-To use Modal:
+- **Serverless GPU instead of a dedicated one.** Stem separation needs a GPU, but a GPU idling between jobs is expensive. Modal spins one up *per job* and bills only for the seconds of inference — the whole thing runs on free credits. The Flask backend dispatches the job, streams progress over SocketIO, and never touches a GPU itself.
 
-```bash
-pip install modal
-modal token new                # opens browser to authenticate (no card needed)
-modal deploy modal_demucs.py   # builds the image + deploys, prints a URL
-```
+- **Surviving an ephemeral filesystem.** The app is hosted on a free tier whose disk is wiped on every restart/cold-start. Early on, songs and setlists silently vanished after the server slept. Fix: stems, metadata, setlists, and mix snapshots all persist to **Cloudflare R2** (S3-compatible), and the backend rehydrates its local cache from R2 on boot — in a background thread, so the port binds fast enough to pass the platform's health check.
 
-Take the URL Modal prints (looks like `https://<username>--slicersmthng-demucs-separate.modal.run`) and set it as `MODAL_DEMUCS_URL` on Render, alongside `STEM_SEPARATOR=modal`. Save → Render redeploys → stem separation now runs free on Modal's GPU.
+- **Pitch-neutral time-stretch in the browser.** A naive `playbackRate` change speeds up *and* raises pitch. The player uses **Tone.js GrainPlayer** (granular synthesis) so tempo and pitch are independent controls — slow a solo to 60% and it stays in the original key.
 
-### YouTube on a cloud host
+- **A near-sample-accurate metronome.** Web Audio schedules clicks ~250 ms ahead for glitch-free timing, which normally means UI changes lag. The engine tracks pending click buffers and cancels the queued-but-unplayed ones the instant you re-align the grid, so a drag/tap takes effect within ~10 ms instead of a full beat later. It also supports **multiple tempo regions per song** for tracks that change tempo mid-way.
 
-YouTube blocks most datacenter IPs and asks for "sign in to confirm you're not a bot." There are three layers of defense built in:
-
-1. **yt-dlp impersonation** (automatic). The backend tries `web` → `mweb` → `web_safari` clients in order, with a realistic Safari User-Agent. Sometimes that's enough.
-2. **Logged-in cookies** (recommended). Export your YouTube cookies from a logged-in Chrome session — the "Get cookies.txt LOCALLY" extension does this in one click. Then:
-   ```bash
-   # On your Mac:
-   base64 -i ~/Downloads/youtube.com_cookies.txt | pbcopy
-   ```
-   On Render → service → **Environment** → add `YT_DLP_COOKIES_B64` with the clipboard contents. Save → redeploys. Cookies typically last 1–4 weeks; refresh when you start seeing the bot interstitial again.
-3. **Audio file upload** (escape hatch). The UrlBar has an upload button next to it that accepts MP3/WAV/FLAC/M4A directly — bypasses YouTube entirely. Useful for songs not on YouTube, age-restricted videos, or when you don't want to deal with cookies.
-4. **Residential proxy** (most reliable for a real public deploy). Set `YT_DLP_PROXY` to a proxy URL — e.g. `http://user:pass@residential.example.com:8080`. Routes yt-dlp's requests through a real ISP IP that YouTube doesn't flag. Cheap residential proxies exist ($3–5/mo on Proxy-Cheap, IPRoyal, Webshare). This is what commercial competitors (Moises, Fadr) actually do — there's no free bypass that lasts forever.
-
-**Why cookies sometimes fail even when set:** YouTube cross-references the cookie's origin geography with the IP making the request. Cookies set in (say) Mexico hitting YouTube from an Oregon datacenter IP look like account hijacking to their fraud detection. Datacenter IPs + valid account cookies = often rejected. A residential proxy in roughly the same region as where the cookies were created tends to work better.
+- **Custom multi-stem waveform.** Replaced an off-the-shelf waveform library with a hand-written dual-canvas renderer (a static layer for waveforms + beat grid, a dynamic layer for the playhead) that draws all six stems in their own colors and supports zoom for precise beat alignment.
 
 ---
 
-## Run locally
+## AI / ML
 
-### Prerequisites
-- Python 3.11 or 3.12
-- Node.js 20+
-- `ffmpeg` (`brew install ffmpeg` on macOS)
-- A Replicate API token
+To be precise about what's under the hood — this is **inference on pretrained models plus classical signal processing**, not model training:
 
-### Steps
+- **Demucs (Hybrid-Transformer Demucs)** — a pretrained deep-learning model (Meta Research) for music source separation. This is the core: it takes a stereo mix and outputs isolated instrument stems. Runs as a GPU inference service on Modal.
+- **UVR-MDX-NET** — a second pretrained neural network (ONNX) used on demand to split a vocal stem into lead vs. backing vocals.
+- **Classical MIR / DSP (librosa)** — beat/BPM tracking via onset detection, musical-key estimation via Krumhansl–Schmuckler chroma template matching, and chord recognition via template matching against 24 major/minor triads. No neural nets here — these are traditional signal-processing algorithms.
+
+The engineering contribution is the **integration**: wiring these models into a serverless GPU pipeline, persisting and serving their output, and building a real-time interface on top of it.
+
+---
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| **Frontend** | React 19, TypeScript, Vite, Tailwind CSS, Zustand (state), Tone.js (Web Audio), framer-motion, React Router |
+| **Backend** | Python, Flask, Flask-SocketIO |
+| **ML / audio** | Demucs (PyTorch) · UVR-MDX-NET (ONNX) · librosa (DSP) |
+| **Infrastructure** | Modal (serverless GPU inference) · Cloudflare R2 (object storage) · Render (hosting) · Docker |
+| **Ingestion / data** | yt-dlp · LRCLib (lyrics) · MusicBrainz (metadata) · iTunes Search (album art) |
+
+---
+
+## Running it locally
+
+> Stem separation runs on **Modal**, so you'll need a (free) Modal account and a Cloudflare R2 bucket for persistent storage. Both have generous free tiers.
+
 ```bash
-# Backend
-python3 -m venv venv
-source venv/bin/activate
+# 1. Backend
+python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-export REPLICATE_API_TOKEN=r8_...
 
-# Frontend (one-time build, then served by Flask)
+# 2. Frontend
 cd frontend && npm install && npm run build && cd ..
 
-# Run
-python server.py
-# → http://localhost:8080
+# 3. Deploy the GPU separation function (one-time)
+pip install modal && modal token new
+modal deploy modal_demucs.py        # prints your MODAL_DEMUCS_URL
+
+# 4. Configure env (see below), then run
+python server.py                    # serves API + built SPA
 ```
 
-### Frontend dev mode (hot reload, separate from backend)
-```bash
-cd frontend && npm run dev   # → http://localhost:5173 (proxies /api to :8080)
-# In another terminal: python server.py
-```
+Key environment variables (set on the host, never committed):
 
-Vite dev is slow on low-end CPUs (the React + Tailwind hot-reload pipeline is heavy). If you're on an older machine, prefer the production build above.
+| Variable | Purpose |
+|---|---|
+| `MODAL_DEMUCS_URL` | Endpoint of the deployed Modal separation function |
+| `MODAL_KARAOKE_URL` | Endpoint of the deployed vocal-split function (optional feature) |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_PUBLIC_URL_BASE` | Cloudflare R2 credentials for persistent stem/metadata storage |
+| `SITE_PASSWORD` | Optional — gates the whole app behind a shared password |
+| `STEM_SEPARATOR` | `modal` (default separation path) |
 
-### Storage location
-Stems land at `~/Music/SlicerSmthng/songs/<id>/`. Override with `SLICERSMTHNG_STORAGE=/path` to put them elsewhere.
+For frontend hot-reload during development: `cd frontend && npm run dev`.
 
 ---
 
-## Project layout
+## Project structure
 
 ```
-backend/             Flask API (routes, Replicate job runner, librosa analysis, data store)
-frontend/            Vite + React 19 + TS + Tailwind + Zustand
-  src/components/    Layout, PlayerBar, PlayerExpanded, ProcessingModal, SongCard, UrlBar
-  src/pages/         Home, Library, Setlists, SetlistDetail, Settings
-  src/stores/        playerStore, libraryStore, setlistStore, jobStore
-server.py            Flask entry; serves /api/v1/* + built frontend at /
-Dockerfile           Multi-stage build (node → python) for Render / any Docker host
-render.yaml          Render Blueprint (one-click deploy)
-requirements.txt     Python deps (Flask, yt-dlp, replicate, librosa, soundfile)
-PRD.md               Full product spec
+slicersmthng/
+├── server.py             # Flask entrypoint (API + static SPA + auth gate)
+├── modal_demucs.py       # Serverless GPU function: Demucs separation + BPM/key/chord
+├── modal_karaoke.py      # Serverless GPU function: lead/backing vocal split (UVR)
+├── backend/
+│   ├── routes.py         # REST API (import, jobs, songs, stems, tempo, split, download…)
+│   ├── jobs.py           # Import pipeline: ingest → separate → analyze → persist
+│   ├── storage.py        # Cloudflare R2 persistence + boot-time rehydration
+│   ├── split.py          # On-demand stem refinement (karaoke / L-R)
+│   ├── download.py       # Merge-to-mp3 / zip stem export
+│   └── metadata.py       # MusicBrainz + iTunes enrichment
+└── frontend/src/
+    ├── lib/audioEngine.ts             # Web Audio mixing engine + metronome scheduler
+    ├── components/PlayerExpanded.tsx  # Full mixer / tempo / loop / align UI
+    ├── components/WaveformView.tsx    # Multi-stem canvas waveform + beat grid
+    └── stores/                        # Zustand state (player, library, setlists, jobs)
 ```
 
 ---
 
-## API
+## Roadmap
 
-All under `/api/v1/`:
-
-| Method | Path | Purpose |
-|---|---|---|
-| `POST` | `/import` | Body `{url, model, format}` → returns `{job_id}` |
-| `GET`  | `/jobs/<id>` | Job status + progress |
-| `GET`  | `/songs` | List library |
-| `GET`  | `/songs/<id>` | Single song meta + chords |
-| `DELETE` | `/songs/<id>` | Delete song and stems |
-| `GET`  | `/songs/<id>/stems/<name>` | Stream a single stem |
-| `GET`  | `/songs/<id>/thumbnail` | YouTube thumbnail |
-| `GET`/`POST` | `/songs/<id>/snapshots` | Mix snapshot (volumes, mute/solo, loop, tempo) |
-| `PUT`  | `/songs/<id>/notes` | Per-song notes |
-| `GET`/`POST` | `/setlists` | List / create |
-| `PUT`/`DELETE` | `/setlists/<id>` | Update / delete |
-
-WebSocket events on the same origin (Socket.IO): `job:progress`, `job:complete`, `job:error`.
+- [ ] In-app search & import (yt-dlp search → pick a result → slice)
+- [ ] Chord-annotated lyrics (overlay detected chords on synced lyric lines)
+- [ ] Visual metronome + count-in overlay
+- [ ] Saveable mixer presets per song
 
 ---
 
-## Roadmap (where this is going)
-
-See [`PRD.md`](./PRD.md) §12. Short version:
-- v1: full PRD scope — A/B loop, tempo slowdown, chord timeline, setlists, record-over-stems
-- v1.x: per-stem EQ / pan / reverb; chord chart export
-- v2: cloud sync, shared setlists, band workspaces
+<div align="center">
+<sub>Built as a real tool for real practice sessions. The separation models are pretrained and run as inference services — the project is the system engineered around them.</sub>
+</div>

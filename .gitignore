@@ -48,3 +48,13 @@ models/
 # These shouldn't be in git; they're under ~/Music/SlicerSmthng/ on disk
 # but a stray copy might appear here during testing.
 songs/
+
+# --- Secrets / env (NEVER commit — all secrets are host env vars) ---
+.env
+.env.*
+*.env
+.dev.vars
+*cookies*.txt
+*.pem
+*.key
+secrets.json
