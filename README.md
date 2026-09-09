@@ -76,7 +76,7 @@ flowchart LR
 
 These are the decisions that shaped the build:
 
-- **Serverless GPU instead of a dedicated one.** Stem separation needs a GPU, but a GPU idling between jobs is expensive. Modal spins one up *per job* and bills only for the seconds of inference — the whole thing runs on free credits. The Flask backend dispatches the job, streams progress over SocketIO, and never touches a GPU itself.
+- **Serverless GPU instead of a dedicated one.** Stem separation needs a GPU, but a GPU idling between jobs is expensive. Modal spins one up *per job* and bills only for the seconds of inference — the whole thing runs on free credits. The Flask backend dispatches the job, streams progress over SocketIO, and never touches a GPU itself. The separation step sits behind a backend-agnostic interface, so the `STEM_SEPARATOR` env var swaps between the Modal path and a Replicate hosted-API fallback without changing the rest of the pipeline; the hosted demo runs Modal.
 
 - **Surviving an ephemeral filesystem.** The app is hosted on a free tier whose disk is wiped on every restart/cold-start. Early on, songs and setlists silently vanished after the server slept. Fix: stems, metadata, setlists, and mix snapshots all persist to **Cloudflare R2** (S3-compatible), and the backend rehydrates its local cache from R2 on boot — in a background thread, so the port binds fast enough to pass the platform's health check.
 
@@ -114,7 +114,7 @@ The engineering contribution is the **integration**: wiring these models into a 
 
 ## Running it locally
 
-> Stem separation runs on **Modal**, so you'll need a (free) Modal account and a Cloudflare R2 bucket for persistent storage. Both have generous free tiers.
+> Stem separation runs through a pluggable backend chosen by `STEM_SEPARATOR`: **Modal** (serverless GPU — what the hosted demo uses) or **Replicate** (a hosted Demucs API, and the code's default). The quickstart below sets up the Modal path; either way, pair it with a Cloudflare R2 bucket for persistent storage. All of these have generous free tiers.
 
 ```bash
 # 1. Backend
@@ -128,7 +128,8 @@ cd frontend && npm install && npm run build && cd ..
 pip install modal && modal token new
 modal deploy modal_demucs.py        # prints your MODAL_DEMUCS_URL
 
-# 4. Configure env (see below), then run
+# 4. Point the app at Modal + add your R2 creds (see the env table below), then run
+export STEM_SEPARATOR=modal         # otherwise it defaults to the Replicate backend
 python server.py                    # serves API + built SPA
 ```
 
@@ -136,11 +137,12 @@ Key environment variables (set on the host, never committed):
 
 | Variable | Purpose |
 |---|---|
-| `MODAL_DEMUCS_URL` | Endpoint of the deployed Modal separation function |
+| `STEM_SEPARATOR` | Which backend runs separation: `modal` or `replicate`. **Defaults to `replicate`** when unset; the hosted demo sets it to `modal`. |
+| `MODAL_DEMUCS_URL` | Endpoint of the deployed Modal separation function — required when `STEM_SEPARATOR=modal` |
 | `MODAL_KARAOKE_URL` | Endpoint of the deployed vocal-split function (optional feature) |
+| `REPLICATE_API_TOKEN` | Required when `STEM_SEPARATOR=replicate` (the default) — token for Replicate's hosted Demucs |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_PUBLIC_URL_BASE` | Cloudflare R2 credentials for persistent stem/metadata storage |
 | `SITE_PASSWORD` | Optional — gates the whole app behind a shared password |
-| `STEM_SEPARATOR` | `modal` (default separation path) |
 
 For frontend hot-reload during development: `cd frontend && npm run dev`.
 
