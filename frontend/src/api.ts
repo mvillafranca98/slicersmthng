@@ -13,6 +13,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  searchYouTube: (query: string) =>
+    request<{ results: import('./types').YouTubeSearchResult[] }>(`/search?q=${encodeURIComponent(query)}`)
+      .then(r => r.results),
   importUrl: (url: string, model: string, format: string) =>
     request<{ job_id: string }>('/import', {
       method: 'POST',

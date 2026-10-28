@@ -58,27 +58,23 @@ def _materialize_cookies() -> Path | None:
 
 
 def _yt_dlp_opts(extra: dict | None = None) -> dict:
-    """Build yt-dlp opts with our anti-bot defaults applied."""
+    """Build yt-dlp opts the way StemKit (github.com/danielravina/stemkit) runs it.
+
+    YouTube client and User-Agent are left to yt-dlp: its defaults are the
+    combination it keeps working, and overriding them broke both halves of
+    the importer (an iPhone UA made search return nothing; forcing the
+    mweb/web clients made downloads fail with "No video formats found").
+
+    What yt-dlp does need is a JavaScript runtime to solve YouTube's player
+    challenges — without one it falls back to a single JS-less client and
+    many videos lose their audio formats. It only auto-enables Deno, so Node
+    (22+, shipped in the Docker image) is turned on explicitly. The solver
+    scripts come from the yt-dlp-ejs package (the `yt-dlp[default]` extra).
+    """
     opts: dict = {
         "quiet": True,
         "no_warnings": True,
-        # Mobile-web client FIRST: YouTube treats mobile sessions more leniently
-        # than desktop web for unfamiliar IPs (mobile-user pattern is harder to
-        # flag as a bot). Fall back to desktop variants if mweb doesn't return
-        # the requested formats.
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["mweb", "web", "web_safari"],
-            }
-        },
-        # iPhone-Safari UA so the mweb client looks plausible.
-        "http_headers": {
-            "User-Agent": (
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) "
-                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 "
-                "Mobile/15E148 Safari/604.1"
-            ),
-        },
+        "js_runtimes": {"node": {}},
     }
 
     cookies = _materialize_cookies()
@@ -95,6 +91,42 @@ def _yt_dlp_opts(extra: dict | None = None) -> dict:
     if extra:
         opts.update(extra)
     return opts
+
+
+SEARCH_MAX_RESULTS = 15
+
+
+def search_youtube(query: str, limit: int = SEARCH_MAX_RESULTS) -> list[dict]:
+    """Top YouTube matches for a free-text query (yt-dlp `ytsearch`).
+
+    Flat extraction reads only the results page — no per-video player
+    requests — so a search is one YouTube round trip (~1–2 s).
+    """
+    import yt_dlp
+    opts = _yt_dlp_opts({"extract_flat": "in_playlist", "socket_timeout": 15})
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+    except yt_dlp.utils.DownloadError as e:
+        raise RuntimeError(_friendly_ytdlp_error(str(e))) from e
+
+    results = []
+    for entry in (info or {}).get("entries") or []:
+        video_id = entry.get("id")
+        title = entry.get("title")
+        # Live streams never finish downloading, so they can't be sliced.
+        if not video_id or not title or entry.get("live_status") == "is_live":
+            continue
+        duration = entry.get("duration")
+        results.append({
+            "id": video_id,
+            "title": title,
+            "channel": entry.get("channel") or entry.get("uploader") or "",
+            "duration": round(duration) if duration else None,
+            "url": f"https://www.youtube.com/watch?v={video_id}",
+            "thumbnail": f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg",
+        })
+    return results
 
 
 def _bypass_status() -> str:

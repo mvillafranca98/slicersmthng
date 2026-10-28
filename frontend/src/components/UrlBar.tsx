@@ -1,5 +1,5 @@
-import { useCallback, useRef, useState } from 'react';
-import { Upload, Sparkles } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Upload, Sparkles, Search } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { toast } from 'sonner';
 import { useLibraryStore } from '../stores/libraryStore';
@@ -7,8 +7,12 @@ import { useJobStore } from '../stores/jobStore';
 import { usePlayerStore } from '../stores/playerStore';
 import { api } from '../api';
 import { cn } from '../lib/cn';
+import type { YouTubeSearchResult } from '../types';
+import { YouTubeResults, type SearchState } from './YouTubeResults';
 
 const API_BASE = import.meta.env.DEV ? '' : window.location.origin;
+
+const isHttpUrl = (t: string) => t.startsWith('http://') || t.startsWith('https://');
 
 /** Pull a display title out of a URL — e.g. "youtube.com/watch?v=..." → "YouTube · ..." */
 function prettyUrlTitle(url: string): string {
@@ -42,6 +46,10 @@ export function UrlBar() {
   const [format, setFormat] = useState('mp3');
   const [importing, setImporting] = useState(false);
   const [showOptions, setShowOptions] = useState(false);
+  const [search, setSearch] = useState<SearchState>({ status: 'idle' });
+  // Bumped per search so a slow earlier response can't overwrite a newer one.
+  const searchSeq = useRef(0);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const fetchSongs = useLibraryStore(s => s.fetchSongs);
   const addJob = useJobStore(s => s.addJob);
@@ -51,7 +59,7 @@ export function UrlBar() {
 
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const t = (e.clipboardData?.getData('text') || '').trim();
-    if (t && (t.startsWith('http://') || t.startsWith('https://'))) {
+    if (t && isHttpUrl(t)) {
       e.preventDefault();
       setUrl(t);
     }
@@ -135,19 +143,59 @@ export function UrlBar() {
     }, 1500);
   }, [addJob, updateJob, completeJob, failJob, fetchSongs]);
 
-  const handleImport = useCallback(async () => {
-    const u = url.trim();
-    if (!u || !(u.startsWith('http://') || u.startsWith('https://'))) return;
+  const startImport = useCallback(async (u: string, title: string) => {
     setImporting(true);
     try {
       const { job_id } = await api.importUrl(u, model, format);
-      wireJob(job_id, { title: prettyUrlTitle(u) });
+      wireJob(job_id, { title });
     } catch (e) {
       failJob(Object.keys(useJobStore.getState().jobs)[0] || 'unknown', (e as Error).message);
     } finally {
       setImporting(false);
     }
-  }, [url, model, format, wireJob, failJob]);
+  }, [model, format, wireJob, failJob]);
+
+  const closeSearch = useCallback(() => {
+    searchSeq.current++;
+    setSearch({ status: 'idle' });
+  }, []);
+
+  const runSearch = useCallback(async (query: string) => {
+    const seq = ++searchSeq.current;
+    setSearch({ status: 'loading', query });
+    try {
+      const results = await api.searchYouTube(query);
+      if (seq === searchSeq.current) setSearch({ status: 'done', query, results });
+    } catch (e) {
+      if (seq === searchSeq.current) setSearch({ status: 'error', query, message: (e as Error).message });
+    }
+  }, []);
+
+  // A link slices straight away; anything else is a YouTube search.
+  const handleSubmit = useCallback(() => {
+    const t = url.trim();
+    if (!t) return;
+    if (isHttpUrl(t)) {
+      closeSearch();
+      startImport(t, prettyUrlTitle(t));
+    } else {
+      runSearch(t);
+    }
+  }, [url, closeSearch, startImport, runSearch]);
+
+  const handlePick = useCallback((result: YouTubeSearchResult) => {
+    closeSearch();
+    startImport(result.url, result.title);
+  }, [closeSearch, startImport]);
+
+  useEffect(() => {
+    if (search.status === 'idle') return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) closeSearch();
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [search.status, closeSearch]);
 
   const handleFiles = useCallback(async (files: File[]) => {
     if (!files.length) return;
@@ -174,17 +222,23 @@ export function UrlBar() {
     }
   }, [model, format, wireJob, failJob]);
 
+  const trimmed = url.trim();
+  const searchMode = trimmed !== '' && !isHttpUrl(trimmed);
+
   return (
-    <div className="flex flex-col gap-2 w-full max-w-3xl">
+    <div ref={containerRef} className="relative flex flex-col gap-2 w-full max-w-3xl">
       <div className="flex gap-2 items-center">
         <input
           type="text"
-          placeholder="Paste a SoundCloud, Bandcamp, YouTube, or direct audio URL"
+          placeholder="Search YouTube or paste any audio link"
           value={url}
           onChange={e => setUrl(e.target.value)}
           onPaste={handlePaste}
-          onKeyDown={e => { if (e.key === 'Enter') handleImport(); }}
-          className="flex-1 rounded-lg bg-bg-card border border-white/10 px-4 py-2.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+          onKeyDown={e => {
+            if (e.key === 'Enter') handleSubmit();
+            if (e.key === 'Escape') closeSearch();
+          }}
+          className="flex-1 min-w-0 rounded-lg bg-bg-card border border-white/10 px-4 py-2.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
         />
 
         <button
@@ -220,19 +274,24 @@ export function UrlBar() {
 
         <button
           type="button"
-          onClick={handleImport}
-          disabled={!url.trim() || importing}
+          onClick={handleSubmit}
+          disabled={!trimmed || importing || search.status === 'loading'}
+          aria-label={importing ? 'Slicing' : searchMode ? 'Search YouTube' : 'Slice it'}
           className={cn(
-            'h-10 px-5 rounded-lg inline-flex items-center gap-1.5 font-medium text-sm text-white transition-all shrink-0',
+            'h-10 px-3 sm:px-5 rounded-lg inline-flex items-center gap-1.5 font-medium text-sm text-white transition-all shrink-0',
             'bg-gradient-to-r from-primary to-primary-hover shadow-[0_4px_20px_-6px_rgba(255,169,77,0.7)]',
             'hover:shadow-[0_6px_28px_-6px_rgba(255,169,77,0.9)] active:scale-[0.98]',
             'disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none'
           )}
         >
-          <Sparkles className="w-3.5 h-3.5" />
-          {importing ? 'Slicing…' : 'Slice It'}
+          {searchMode ? <Search className="w-3.5 h-3.5" /> : <Sparkles className="w-3.5 h-3.5" />}
+          <span className="hidden sm:inline">{importing ? 'Slicing…' : searchMode ? 'Search' : 'Slice It'}</span>
         </button>
       </div>
+
+      {search.status !== 'idle' && (
+        <YouTubeResults search={search} disabled={importing} onPick={handlePick} onClose={closeSearch} />
+      )}
 
       {showOptions && (
         <div className="flex gap-4 text-xs px-1">

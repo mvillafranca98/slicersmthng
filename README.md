@@ -4,7 +4,7 @@
 
 ### An AI-powered practice workstation that splits any song into its individual instruments.
 
-Paste a link, get isolated **vocals · drums · bass · guitar · piano** — then mute what you play, slow it down without changing pitch, loop the hard bar, and rehearse against a beat-aligned metronome.
+Search a song or paste a link, get isolated **vocals · drums · bass · guitar · piano** — then mute what you play, slow it down without changing pitch, loop the hard bar, and rehearse against a beat-aligned metronome.
 
 ![React](https://img.shields.io/badge/React_19-20232A?logo=react&logoColor=61DAFB)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
@@ -21,7 +21,7 @@ Paste a link, get isolated **vocals · drums · bass · guitar · piano** — th
 
 ## What it is
 
-Learning a song by ear is hard when every instrument is glued into one stereo mix. **SlicerSmthng** takes a song — from a YouTube/SoundCloud/Bandcamp link or an uploaded file — and uses a deep-learning source-separation model to pull it apart into individual instrument stems. It then hands those stems to a browser-based mixing engine built for practice: solo the guitar to learn a riff, mute the vocals for karaoke, drop the tempo to 75% **without dropping the pitch**, loop four bars until they're clean, and run a metronome locked to the actual beat grid.
+Learning a song by ear is hard when every instrument is glued into one stereo mix. **SlicerSmthng** takes a song — from an in-app YouTube search, a YouTube/SoundCloud/Bandcamp link, or an uploaded file — and uses a deep-learning source-separation model to pull it apart into individual instrument stems. It then hands those stems to a browser-based mixing engine built for practice: solo the guitar to learn a riff, mute the vocals for karaoke, drop the tempo to 75% **without dropping the pitch**, loop four bars until they're clean, and run a metronome locked to the actual beat grid.
 
 It's the tool I wanted as a musician: a rehearsal room where you control every instrument independently.
 
@@ -57,7 +57,7 @@ The interesting engineering isn't a single model call — it's orchestrating a *
 
 ```mermaid
 flowchart LR
-    A[React + TypeScript SPA<br/>Web Audio mixing engine] -- paste link / upload --> B[Flask API<br/>on Render]
+    A[React + TypeScript SPA<br/>Web Audio mixing engine] -- search / paste link / upload --> B[Flask API<br/>on Render]
     B -- audio --> C[yt-dlp ingest]
     B -- dispatch job --> D[Modal<br/>Serverless GPU · T4]
     D -- inference --> E[Demucs<br/>source separation]
@@ -108,7 +108,7 @@ The engineering contribution is the **integration**: wiring these models into a 
 | **Backend** | Python, Flask, Flask-SocketIO |
 | **ML / audio** | Demucs (PyTorch) · UVR-MDX-NET (ONNX) · librosa (DSP) |
 | **Infrastructure** | Modal (serverless GPU inference) · Cloudflare R2 (object storage) · Render (hosting) · Docker |
-| **Ingestion / data** | yt-dlp · LRCLib (lyrics) · MusicBrainz (metadata) · iTunes Search (album art) |
+| **Ingestion / data** | yt-dlp (+ Node for YouTube's JS challenges) · LRCLib (lyrics) · MusicBrainz (metadata) · iTunes Search (album art) |
 
 ---
 
@@ -173,7 +173,7 @@ slicersmthng/
 
 ## Roadmap
 
-- [ ] In-app search & import (yt-dlp search → pick a result → slice)
+- [x] In-app search & import (yt-dlp search → pick a result → slice)
 - [ ] Chord-annotated lyrics (overlay detected chords on synced lyric lines)
 - [ ] Visual metronome + count-in overlay
 - [ ] Saveable mixer presets per song

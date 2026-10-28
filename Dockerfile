@@ -1,6 +1,7 @@
 # SlicerSmthng — single-image production build.
-# Stage 1: build the React frontend.
-FROM node:20-bookworm-slim AS frontend
+# Stage 1: build the React frontend. Node 22 because the runtime stage also
+# reuses this binary for yt-dlp, which needs Node 22+.
+FROM node:22-bookworm-slim AS frontend
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -20,11 +21,17 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# yt-dlp runs YouTube's player challenges through Node (see _yt_dlp_opts in
+# backend/jobs.py). Without a JS runtime it can't resolve most audio formats.
+COPY --from=frontend /usr/local/bin/node /usr/local/bin/node
+RUN node --version
+
 WORKDIR /app
 COPY requirements.txt ./
 # Install pinned deps, then upgrade yt-dlp to the very latest so we get the
-# newest YouTube anti-bot workarounds without rebuilding the requirements pin.
-RUN pip install -r requirements.txt && pip install -U yt-dlp
+# newest YouTube fixes without rebuilding the requirements pin. The [default]
+# extra brings the matching yt-dlp-ejs (challenge-solver scripts Node runs).
+RUN pip install -r requirements.txt && pip install -U "yt-dlp[default]"
 
 # Copy backend source.
 COPY server.py ./

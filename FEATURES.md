@@ -7,6 +7,7 @@ Quick overview of what’s implemented per the PRD (v2).
 ## 1. YouTube import and processing
 
 - **URL bar** at the top of every screen; paste YouTube URL (including Cmd+V).
+- **YouTube search** from the same bar: type words instead of a link, press Enter, pick a result to slice it (yt-dlp `ytsearch`, `GET /api/v1/search`).
 - **Options:** Model (`htdemucs`, `htdemucs_ft`, `htdemucs_6s`) and format (MP3 320kbps / FLAC).
 - **“Slice It”** starts the job; **processing modal** shows stages (Validating → Downloading → Extracting → Separating → Analyzing → Finalizing) and progress.
 - **WebSocket** (SocketIO) for live job progress; fallback **polling** if WebSocket isn’t available.

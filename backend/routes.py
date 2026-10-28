@@ -14,7 +14,7 @@ from backend.utils import (
     validate_song_id,
     validate_stem_name,
 )
-from backend.jobs import run_import, run_import_file
+from backend.jobs import run_import, run_import_file, search_youtube
 from backend.storage import sync_metas_from_r2, save_song_meta, save_song_lyrics, delete_song_from_r2, r2_status, hydrate_data_blobs
 from backend.metadata import enrich_metadata
 from backend.data import (
@@ -230,6 +230,25 @@ def diag():
     })
 
 # ----- Import & Jobs -----
+
+SEARCH_QUERY_MAX_CHARS = 200
+
+
+@api.route("/search")
+def search():
+    """Free-text YouTube search for the import bar. Picking a result posts
+    its watch URL to /import, so search and paste share one download path."""
+    query = request.args.get("q", "").strip()
+    if not query:
+        return jsonify({"error": "Search query required"}), 400
+    if len(query) > SEARCH_QUERY_MAX_CHARS:
+        return jsonify({"error": f"Search is limited to {SEARCH_QUERY_MAX_CHARS} characters"}), 400
+    try:
+        results = search_youtube(query)
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 502
+    return jsonify({"results": results})
+
 
 @api.route("/import", methods=["POST"])
 def import_url():

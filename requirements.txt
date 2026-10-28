@@ -1,7 +1,8 @@
 # SlicerSmthng — PRD v2 backend (Replicate cloud GPU mode)
 
-# YouTube download (local)
-yt-dlp>=2024.10.7
+# YouTube search + download. [default] adds yt-dlp-ejs, the scripts yt-dlp
+# runs under Node to solve YouTube's player challenges.
+yt-dlp[default]>=2025.11.12
 
 # Stem separation via Replicate cloud GPU
 replicate>=0.32.0

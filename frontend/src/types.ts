@@ -96,3 +96,14 @@ export interface Job {
    *  The job itself keeps running server-side. */
   dismissed?: boolean;
 }
+
+/** One row from GET /api/v1/search (yt-dlp `ytsearch`). */
+export interface YouTubeSearchResult {
+  id: string;
+  title: string;
+  channel: string;
+  /** Seconds; null when YouTube doesn't list one. */
+  duration: number | null;
+  url: string;
+  thumbnail: string;
+}
